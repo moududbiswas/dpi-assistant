@@ -1,21 +1,8 @@
-import sqlite3
 import os
 import re
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from college_data import college_info
-
-conn = sqlite3.connect("database.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user TEXT,
-    message TEXT,
-    reply TEXT
-)
-""")
-conn.commit()
 
 app = Flask(__name__)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -51,12 +38,6 @@ def ask():
 
     reply = response.choices[0].message.content
     chat_history.append({"role": "assistant", "content": reply})
-
-    cursor.execute(
-        "INSERT INTO messages (user, message, reply) VALUES (?, ?, ?)",
-        ("anonymous", user_input, reply)
-    )
-    conn.commit()
 
     return jsonify({"reply": reply})
 
