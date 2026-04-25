@@ -56,10 +56,10 @@ def ask():
     )
     conn.commit()
 
- tts = gTTS(text=reply, lang='bn')
-tts.save("static/reply.mp3")
+    tts = gTTS(text=reply, lang='bn')
+    tts.save("static/reply.mp3")
 
-return jsonify({"reply": reply, "audio": "/static/reply.mp3"})
+    return jsonify({"reply": reply, "audio": "/static/reply.mp3"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
