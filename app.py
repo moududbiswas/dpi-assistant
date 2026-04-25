@@ -28,17 +28,20 @@ def home():
 
 @app.route("/ask", methods=["POST"])
 def ask():
-    user_input = request.json["message"]
-    chat_history.append({"role": "user", "content": user_input})
+    data = request.json
+    user_input = data["message"]
+    history = data.get("history", [])
+
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += history
+    messages.append({"role": "user", "content": user_input})
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
-        messages=chat_history
+        messages=messages
     )
 
     reply = response.choices[0].message.content
-    chat_history.append({"role": "assistant", "content": reply})
-
     return jsonify({"reply": reply})
 
 if __name__ == "__main__":
