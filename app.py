@@ -1,6 +1,5 @@
 import sqlite3
 import os
-import random
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from gtts import gTTS
@@ -57,11 +56,10 @@ def ask():
     )
     conn.commit()
 
-    filename = f"reply_{random.randint(1000,9999)}.mp3"
-    tts = gTTS(text=reply, lang='bn')
-    tts.save(f"static/{filename}")
+ tts = gTTS(text=reply, lang='bn')
+tts.save("static/reply.mp3")
 
-    return jsonify({"reply": reply, "audio": f"/static/{filename}"})
+return jsonify({"reply": reply, "audio": "/static/reply.mp3"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
