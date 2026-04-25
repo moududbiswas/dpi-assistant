@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+    <meta charset="UTF-8">
+    <title>DPI Assistant</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #1a1a2e; color: white; padding: 20px; }
+        h1 { text-align: center; color: #00d4ff; margin-bottom: 5px; }
+        h3 { text-align: center; color: #aaa; margin-bottom: 20px; }
+        #chatbox { background: #16213e; border-radius: 10px; padding: 20px; height: 450px; overflow-y: auto; margin-bottom: 20px; }
+        .user-msg { text-align: right; background: #0f3460; padding: 10px 15px; border-radius: 15px; margin: 8px 0; display: inline-block; float: right; clear: both; max-width: 80%; }
+        .ai-msg { text-align: left; background: #533483; padding: 10px 15px; border-radius: 15px; margin: 8px 0; display: inline-block; float: left; clear: both; max-width: 80%; }
+        .clearfix { clear: both; }
+        #inputarea { display: flex; gap: 10px; }
+        #userInput { flex: 1; padding: 12px; border-radius: 8px; border: none; font-size: 16px; background: #16213e; color: white; outline: none; border: 1px solid #333; }
+        button { padding: 12px 25px; background: #00d4ff; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; color: #000; }
+        button:hover { background: #00b8d9; }
+        .typing { color: #aaa; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>🎓 DPI Assistant</h1>
+    <h3>ঢাকা পলিটেকনিক ইনস্টিটিউট AI সহকারী</h3>
+    <div id="chatbox"></div>
+    <div id="inputarea">
+        <input type="text" id="userInput" placeholder="আপনার প্রশ্ন লিখুন..." />
+        <button onclick="sendMessage()">পাঠান ➤</button>
+    </div>
+
+    <script>
+        async function sendMessage() {
+            const input = document.getElementById("userInput");
+            const chatbox = document.getElementById("chatbox");
+            const message = input.value.trim();
+            if (!message) return;
+
+            chatbox.innerHTML += `<div class="user-msg">🧑 ${message}</div><div class="clearfix"></div>`;
+            chatbox.innerHTML += `<div class="ai-msg typing" id="typing">⏳ ভাবছি...</div><div class="clearfix"></div>`;
+            input.value = "";
+            chatbox.scrollTop = chatbox.scrollHeight;
+
+            const res = await fetch("/ask", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message })
+            });
+
+            const data = await res.json();
+
+            document.getElementById("typing").remove();
+            chatbox.innerHTML += `<div class="ai-msg">🤖 ${data.reply}</div><div class="clearfix"></div>`;
+            chatbox.scrollTop = chatbox.scrollHeight;
+
+            const audio = new Audio(data.audio);
+            audio.play();
+        }
+
+        document.getElementById("userInput").addEventListener("keypress", function(e) {
+            if (e.key === "Enter") sendMessage();
+        });
+    </script>
+</body>
+</html>
