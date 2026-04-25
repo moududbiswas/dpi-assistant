@@ -1,10 +1,8 @@
 import sqlite3
 import os
 import re
-import tempfile
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
-from gtts import gTTS
 from college_data import college_info
 
 conn = sqlite3.connect("database.db", check_same_thread=False)
@@ -30,20 +28,12 @@ system_prompt = """
 
 === রুটিন সম্পর্কিত বিশেষ নিয়ম ===
 যখন কেউ ক্লাস রুটিন সম্পর্কে জিজ্ঞেস করবে, তুমি সরাসরি রুটিন বলবে না।
-প্রথমে এই তিনটি প্রশ্ন একে একে করবে:
-ধাপ ১: কোন বিভাগের রুটিন জানতে চান? যেমন: ইলেকট্রিক্যাল, কম্পিউটার, সিভিল?
-ধাপ ২: কোন শিফট? ১ম শিফট নাকি ২য় শিফট?
-ধাপ ৩: কোন সেমিস্টার এবং গ্রুপ? যেমন: ৫ম সেমিস্টার, গ্রুপ C?
-সব তথ্য পাওয়ার পরেই শুধু সেই নির্দিষ্ট রুটিন বলবে।
+ধাপ ১: কোন বিভাগের রুটিন জানতে চান?
+ধাপ ২: কোন শিফট?
+ধাপ ৩: কোন সেমিস্টার এবং গ্রুপ?
 """ + college_info
 
 chat_history = [{"role": "system", "content": system_prompt}]
-
-def clean_for_speech(text):
-    text = re.sub(r'[^\w\s\u0980-\u09FF\u0020-\u007E]', '', text)
-    text = re.sub(r'[\*\#\_\>\-\=\~\`]', '', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
 
 @app.route("/")
 def home():
@@ -68,13 +58,7 @@ def ask():
     )
     conn.commit()
 
-    clean_reply = clean_for_speech(reply)
-    tts = gTTS(text=clean_reply, lang='bn')
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3", dir="static")
-    tts.save(tmp.name)
-    filename = os.path.basename(tmp.name)
-
-    return jsonify({"reply": reply, "audio": f"/static/{filename}"})
+    return jsonify({"reply": reply})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

@@ -28,37 +28,41 @@
         <button onclick="sendMessage()">পাঠান ➤</button>
     </div>
 
-    <script>
-        async function sendMessage() {
-            const input = document.getElementById("userInput");
-            const chatbox = document.getElementById("chatbox");
-            const message = input.value.trim();
-            if (!message) return;
+  <script>
+    function speak(text) {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'bn-BD';
+        utterance.rate = 0.9;
+        window.speechSynthesis.speak(utterance);
+    }
 
-            chatbox.innerHTML += `<div class="user-msg">🧑 ${message}</div><div class="clearfix"></div>`;
-            chatbox.innerHTML += `<div class="ai-msg typing" id="typing">⏳ ভাবছি...</div><div class="clearfix"></div>`;
-            input.value = "";
-            chatbox.scrollTop = chatbox.scrollHeight;
+    async function sendMessage() {
+        const input = document.getElementById("userInput");
+        const chatbox = document.getElementById("chatbox");
+        const message = input.value.trim();
+        if (!message) return;
 
-            const res = await fetch("/ask", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ message })
-            });
+        chatbox.innerHTML += `<div class="user-msg">🧑 ${message}</div><div class="clearfix"></div>`;
+        chatbox.innerHTML += `<div class="ai-msg typing" id="typing">⏳ ভাবছি...</div><div class="clearfix"></div>`;
+        input.value = "";
+        chatbox.scrollTop = chatbox.scrollHeight;
 
-            const data = await res.json();
-
-            document.getElementById("typing").remove();
-            chatbox.innerHTML += `<div class="ai-msg">🤖 ${data.reply}</div><div class="clearfix"></div>`;
-            chatbox.scrollTop = chatbox.scrollHeight;
-
-            const audio = new Audio(data.audio);
-            audio.play();
-        }
-
-        document.getElementById("userInput").addEventListener("keypress", function(e) {
-            if (e.key === "Enter") sendMessage();
+        const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message })
         });
-    </script>
+
+        const data = await res.json();
+        document.getElementById("typing").remove();
+        chatbox.innerHTML += `<div class="ai-msg">🤖 ${data.reply}</div><div class="clearfix"></div>`;
+        chatbox.scrollTop = chatbox.scrollHeight;
+        speak(data.reply);
+    }
+
+    document.getElementById("userInput").addEventListener("keypress", function(e) {
+        if (e.key === "Enter") sendMessage();
+    });
+</script>
 </body>
 </html>
