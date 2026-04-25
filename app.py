@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import re
+import tempfile
 from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from gtts import gTTS
@@ -69,9 +70,11 @@ def ask():
 
     clean_reply = clean_for_speech(reply)
     tts = gTTS(text=clean_reply, lang='bn')
-    tts.save("static/reply.mp3")
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3", dir="static")
+    tts.save(tmp.name)
+    filename = os.path.basename(tmp.name)
 
-    return jsonify({"reply": reply, "audio": "/static/reply.mp3"})
+    return jsonify({"reply": reply, "audio": f"/static/{filename}"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
