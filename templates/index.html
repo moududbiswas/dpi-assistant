@@ -29,14 +29,7 @@
     </div>
 
   <script>
-    let history = [];
-
-function speak(text) {
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'bn-BD';
-    utterance.rate = 0.9;
-    window.speechSynthesis.speak(utterance);
-}
+   let history = [];
 
 async function sendMessage() {
     const input = document.getElementById("userInput");
@@ -63,7 +56,9 @@ async function sendMessage() {
     history.push({"role": "user", "content": message});
     history.push({"role": "assistant", "content": data.reply});
 
-    speak(data.reply);
+    // Play audio from base64
+    const audio = new Audio("data:audio/mp3;base64," + data.audio);
+    audio.play();
 }
 
 document.getElementById("userInput").addEventListener("keypress", function(e) {
