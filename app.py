@@ -10,6 +10,14 @@ from college_data import college_info
 app = Flask(__name__)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
+# Auto fallback models
+MODELS = [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768",
+]
+
 system_prompt = """
 তুমি ঢাকা পলিটেকনিক ইনস্টিটিউটের অফিশিয়াল AI সহকারী। তোমার নাম DPI Assistant।
 সবসময় বাংলায় উত্তর দাও।
@@ -18,9 +26,12 @@ system_prompt = """
 
 === রুটিন সম্পর্কিত বিশেষ নিয়ম ===
 যখন কেউ ক্লাস রুটিন সম্পর্কে জিজ্ঞেস করবে, তুমি সরাসরি রুটিন বলবে না।
-ধাপ ১: কোন বিভাগের রুটিন জানতে চান?
-ধাপ ২: কোন শিফট?
-ধাপ ৩: কোন সেমিস্টার এবং গ্রুপ?
+প্রথমে এই তিনটি প্রশ্ন একে একে করবে:
+ধাপ ১: কোন বিভাগের রুটিন জানতে চান? যেমন: ইলেকট্রিক্যাল, কম্পিউটার, সিভিল?
+ধাপ ২: কোন শিফট? ১ম শিফট নাকি ২য় শিফট?
+ধাপ ৩: কোন সেমিস্টার এবং গ্রুপ? যেমন: ৫ম সেমিস্টার, গ্রুপ C?
+সব তথ্য পাওয়ার পরেই শুধু সেই নির্দিষ্ট রুটিন বলবে।
+যদি সেই রুটিনের তথ্য না থাকে বলবে "এই রুটিনটি এখনো আমার কাছে নেই।"
 """ + college_info
 
 def clean_for_speech(text):
@@ -28,6 +39,21 @@ def clean_for_speech(text):
     text = re.sub(r'[\*\#\_\>\-\=\~\`]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+def get_response(messages):
+    for model in MODELS:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            if "429" in str(e) or "rate_limit" in str(e).lower():
+                print(f"Model {model} rate limited, trying next...")
+                continue
+            raise e
+    return "দুঃখিত, এই মুহূর্তে সকল মডেল ব্যস্ত। কিছুক্ষণ পর আবার চেষ্টা করুন।"
 
 @app.route("/")
 def home():
@@ -43,14 +69,9 @@ def ask():
     messages += history
     messages.append({"role": "user", "content": user_input})
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages
-    )
+    reply = get_response(messages)
 
-    reply = response.choices[0].message.content
-
-    # Generate audio in memory - no file saving!
+    # Generate audio in memory
     clean_reply = clean_for_speech(reply)
     tts = gTTS(text=clean_reply, lang='bn')
     audio_buffer = BytesIO()
