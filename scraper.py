@@ -1,132 +1,124 @@
 import os
 import re
+import hashlib
 import requests
 from datetime import datetime
 from supabase import create_client
-from bs4 import BeautifulSoup
+from groq import Groq
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Supabase setup
+# ==============================
+# CONFIG
+# ==============================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 OCR_API_KEY = os.environ.get("OCR_API_KEY")
-TARGET_URL = "https://dhaka.polytech.gov.bd/pages/notices"
-BASE_URL = "https://dhaka.polytech.gov.bd"
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
-def scrape_with_jina(url):
-    """Method 1 - Jina AI Reader (free, no signup needed!)"""
+TARGET_URL = "https://dhaka.polytech.gov.bd/pages/notices"
+MAX_OCR_CHARS = 5000
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+
+# ==============================
+# HELPERS
+# ==============================
+def sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def clean_ocr_text(text: str) -> str:
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"Page\s+\d+", "", text, flags=re.I)
+    text = re.sub(r"_{2,}|-{2,}", "", text)
+    return text.strip()[:MAX_OCR_CHARS]
+
+
+# ==============================
+# STEP 1 — Get PDF links via Jina
+# ==============================
+def get_pdf_links():
+    print("Fetching PDF links via Jina AI...")
+
+    jina_url = f"https://r.jina.ai/{TARGET_URL}"
+    headers = {
+        "Accept": "text/plain",
+        "X-Return-Format": "markdown"
+    }
+
     try:
-        jina_url = f"https://r.jina.ai/{url}"
-        headers = {
-            "Accept": "text/plain",
-            "X-Return-Format": "text"
-        }
-        response = requests.get(jina_url, headers=headers, timeout=30)
-        if response.status_code == 200:
-            print("Jina AI scraping successful!")
-            return response.text
-        print(f"Jina failed with status: {response.status_code}")
-        return None
+        response = requests.get(jina_url, headers=headers, timeout=60)
+        if response.status_code != 200:
+            print(f"Jina failed: {response.status_code}")
+            return []
+
+        text = response.text
+        print(f"Jina fetched {len(text)} characters")
+
     except Exception as e:
         print(f"Jina error: {e}")
+        return []
+
+    pdf_links = []
+    seen = set()
+
+    # Extract markdown links with PDF URLs — [Title](URL.pdf)
+    md_pattern = r'\[([^\]]+)\]\((https?://[^\)]+\.pdf)\)'
+    md_matches = re.findall(md_pattern, text, re.IGNORECASE)
+
+    for title, url in md_matches:
+        if url not in seen:
+            seen.add(url)
+            pdf_links.append({
+                "title": title.strip(),
+                "url": url.strip()
+            })
+
+    # Also grab raw PDF links not in markdown format
+    raw_pattern = r'https?://[^\s\)\]]+\.pdf'
+    raw_links = re.findall(raw_pattern, text, re.IGNORECASE)
+
+    for url in raw_links:
+        if url not in seen:
+            seen.add(url)
+            filename = url.split("/")[-1].replace(".pdf", "")
+            filename = re.sub(r'[-_]', ' ', filename)
+            pdf_links.append({
+                "title": filename[:80],
+                "url": url
+            })
+
+    print(f"Found {len(pdf_links)} PDF links")
+    return pdf_links
+
+
+# ==============================
+# STEP 2 — OCR the PDF
+# ==============================
+def ocr_pdf(pdf_url: str):
+    if not OCR_API_KEY:
+        print("No OCR API key!")
         return None
 
-def scrape_with_bs4(url):
-    """Method 2 - BeautifulSoup fallback"""
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-        response = requests.get(url, headers=headers, verify=False, timeout=30)
-        soup = BeautifulSoup(response.text, "html.parser")
-        return soup
-    except Exception as e:
-        print(f"BS4 error: {e}")
-        return None
-
-def extract_pdf_links_from_text(text):
-    """Extract PDF links from Jina text output"""
-    pdf_pattern = r'https?://[^\s\)]+\.pdf'
-    links = re.findall(pdf_pattern, text)
-    return list(set(links))  # remove duplicates
-
-def extract_notice_links_from_text(text):
-    """Extract all links and titles from Jina text output"""
-    notices = []
-    lines = text.split('\n')
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-
-        # Jina formats links like: [Title](URL)
-        link_pattern = r'\[([^\]]+)\]\((https?://[^\)]+)\)'
-        matches = re.findall(link_pattern, line)
-
-        for title, url in matches:
-            if len(title) > 5:
-                notices.append({
-                    "title": title.strip(),
-                    "link": url.strip(),
-                    "is_pdf": url.lower().endswith(".pdf")
-                })
-
-        # Also check plain text lines for notice-like content
-        if any(word in line for word in ["নোটিশ", "বিজ্ঞপ্তি", "Notice", "Circular", "notice"]):
-            if len(line) > 10 and "http" not in line:
-                notices.append({
-                    "title": line,
-                    "link": TARGET_URL,
-                    "is_pdf": False
-                })
-
-    return notices
-
-def extract_links_from_bs4(soup):
-    """Extract links from BeautifulSoup"""
-    notices = []
-    for a_tag in soup.find_all("a", href=True):
-        href = a_tag["href"]
-        text = a_tag.get_text(strip=True)
-
-        if not text or len(text) < 5:
-            continue
-
-        if href.startswith("/"):
-            href = BASE_URL + href
-        elif not href.startswith("http"):
-            continue
-
-        notices.append({
-            "title": text,
-            "link": href,
-            "is_pdf": href.lower().endswith(".pdf")
-        })
-
-    return notices
-
-def ocr_pdf(pdf_url):
-    """Extract text from scanned PDF using OCR.space"""
-    try:
-        print(f"Running OCR on: {pdf_url}")
+        print(f"Running OCR...")
         payload = {
             "url": pdf_url,
             "apikey": OCR_API_KEY,
-            "language": "bng",
-            "isOverlayRequired": False,
-            "detectOrientation": True,
+            "OCREngine": 2,
             "scale": True,
-            "OCREngine": 2
+            "detectOrientation": True,
+            "isOverlayRequired": False,
+            # No language — auto detect works best for Bengali!
         }
         response = requests.post(
             "https://api.ocr.space/parse/image",
             data=payload,
-            timeout=60
+            timeout=60,
         )
         result = response.json()
 
@@ -135,96 +127,139 @@ def ocr_pdf(pdf_url):
             return None
 
         parsed = result.get("ParsedResults", [])
-        if parsed:
-            text = parsed[0].get("ParsedText", "").strip()
-            print(f"OCR extracted {len(text)} characters")
-            return text
-        return None
+        if not parsed:
+            print("No OCR results!")
+            return None
+
+        text = parsed[0].get("ParsedText", "")
+        cleaned = clean_ocr_text(text)
+        print(f"OCR extracted {len(cleaned)} characters")
+        return cleaned
 
     except Exception as e:
         print(f"OCR error: {e}")
         return None
 
-def save_notice(title, content, source):
-    """Save to Supabase if not already exists"""
+
+# ==============================
+# STEP 3 — AI Summarize (once!)
+# ==============================
+def summarize_with_ai(title: str, ocr_text: str) -> str:
+    if not ocr_text or len(ocr_text) < 20:
+        return f"নোটিশ: {title}"
+
     try:
-        existing = supabase.table("notices")\
-            .select("id")\
-            .eq("title", title)\
+        print("Summarizing with AI...")
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "তুমি একটি নোটিশ সারসংক্ষেপকারী। বাংলায় ৩-৪ বাক্যে নোটিশের মূল বিষয় সংক্ষেপ করো। শুধু গুরুত্বপূর্ণ তথ্য রাখো।"
+                },
+                {
+                    "role": "user",
+                    "content": f"এই নোটিশটি সংক্ষেপ করো:\n\nশিরোনাম: {title}\n\nবিষয়বস্তু:\n{ocr_text[:2000]}"
+                }
+            ],
+            max_tokens=300
+        )
+        summary = response.choices[0].message.content.strip()
+        print(f"Summary: {summary[:80]}...")
+        return summary
+
+    except Exception as e:
+        print(f"AI summarize error: {e}")
+        return f"নোটিশ: {title}\n\n{ocr_text[:300]}"
+
+
+# ==============================
+# STEP 4 — Database
+# ==============================
+def notice_exists(content_hash: str) -> bool:
+    try:
+        res = supabase.table("notices") \
+            .select("id") \
+            .eq("content_hash", content_hash) \
+            .limit(1) \
             .execute()
+        return bool(res.data)
+    except Exception as e:
+        print(f"DB check error: {e}")
+        return False
 
-        if existing.data:
-            print(f"Already exists: {title}")
-            return False
 
+def save_notice(title, raw_ocr, summary, source, content_hash):
+    try:
         supabase.table("notices").insert({
             "title": title,
-            "content": content,
-            "date": datetime.now().strftime("%Y-%m-%d"),
-            "source": source
+            "content": summary,
+            "raw_content": raw_ocr,
+            "source": source,
+            "content_hash": content_hash,
+            "date": datetime.now().strftime("%Y-%m-%d")
         }).execute()
-
-        print(f"Saved: {title}")
         return True
-
     except Exception as e:
         print(f"Save error: {e}")
         return False
 
+
+# ==============================
+# MAIN
+# ==============================
 def run_scraper():
     print("=" * 50)
-    print("Starting DPI Notice Scraper...")
+    print("DPI Notice Scraper Starting...")
     print("=" * 50)
 
-    notices = []
+    pdf_links = get_pdf_links()
 
-    # Step 1 — Try Jina AI first
-    print("\nStep 1: Trying Jina AI Reader...")
-    jina_text = scrape_with_jina(TARGET_URL)
+    if not pdf_links:
+        print("No PDFs found!")
+        return 0
 
-    if jina_text:
-        # Extract links from Jina output
-        notices = extract_notice_links_from_text(jina_text)
-        pdf_links = extract_pdf_links_from_text(jina_text)
-
-        # Add standalone PDF links
-        for pdf in pdf_links:
-            title = pdf.split('/')[-1].replace('.pdf', '').replace('-', ' ').replace('_', ' ')
-            if not any(n['link'] == pdf for n in notices):
-                notices.append({
-                    "title": title,
-                    "link": pdf,
-                    "is_pdf": True
-                })
-    else:
-        # Step 2 — Fallback to BeautifulSoup
-        print("\nStep 2: Jina failed, trying BeautifulSoup...")
-        soup = scrape_with_bs4(TARGET_URL)
-        if soup:
-            notices = extract_links_from_bs4(soup)
-
-    print(f"\nFound {len(notices)} notices total")
-
-    # Step 3 — Process and save each notice
+    # Only latest 5
+    latest = pdf_links[:5]
+    print(f"\nProcessing latest {len(latest)} PDFs...")
     saved = 0
-    for i, notice in enumerate(notices[:20]):  # limit 20 per run
-        title = notice["title"]
-        link = notice["link"]
 
-        print(f"\n[{i+1}] Processing: {title[:50]}...")
+    for i, item in enumerate(latest):
+        title = item["title"]
+        url = item["url"]
 
-        if notice["is_pdf"] and OCR_API_KEY:
-            content = ocr_pdf(link)
-            if not content:
-                content = f"PDF নোটিশ। বিস্তারিত দেখুন: {link}"
+        print(f"\n[{i+1}] {title[:60]}...")
+        print(f"URL: {url[:70]}...")
+
+        # Step 2 — OCR
+        ocr_text = ocr_pdf(url)
+
+        if not ocr_text:
+            print("OCR failed, saving with link only...")
+            summary = f"নোটিশ: {title}\nবিস্তারিত দেখুন: {url}"
         else:
-            content = f"বিস্তারিত দেখুন: {link}"
+            # Step 3 — AI summarize once
+            summary = summarize_with_ai(title, ocr_text)
 
-        if save_notice(title, content, link):
+        # Check duplicate
+        content_hash = sha256((ocr_text or title) + url)
+
+        if notice_exists(content_hash):
+            print("Already exists, skipping...")
+            continue
+
+        # Step 4 — Save
+        if save_notice(title, ocr_text, summary, url, content_hash):
             saved += 1
+            print(f"Saved!")
+        else:
+            print("Failed to save!")
 
-    print(f"\nDone! Saved {saved} new notices to Supabase!")
+    print(f"\n{'='*50}")
+    print(f"Done! Saved {saved} new notices!")
+    print(f"{'='*50}")
     return saved
+
 
 if __name__ == "__main__":
     run_scraper()
