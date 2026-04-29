@@ -6,9 +6,6 @@ from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from gtts import gTTS
 from supabase import create_client
-from apscheduler.schedulers.background import BackgroundScheduler
-from scraper import run_scraper
-
 
 app = Flask(__name__)
 
@@ -20,20 +17,17 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(run_scraper, 'interval', hours=6)
-scheduler.start()
-
 MODEL = "llama-3.3-70b-versatile"
 
 
 def get_college_data():
     try:
-        qa = supabase.table("qa").select("question, answer").execute()
-        teachers = supabase.table("teachers").select("*").execute()
-        routines = supabase.table("routines").select("*").execute()
-        notices = supabase.table("notices").select("*").execute()
-        locations = supabase.table("locations").select("*").execute()
+        # Strict limits to prevent token overflow!
+        qa = supabase.table("qa").select("question, answer").limit(20).execute()
+        teachers = supabase.table("teachers").select("name, subject, short_name, designation").limit(20).execute()
+        routines = supabase.table("routines").select("department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room").limit(30).execute()
+        notices = supabase.table("notices").select("title, content").limit(5).order("created_at", desc=True).execute()
+        locations = supabase.table("locations").select("name, description, floor, building").limit(20).execute()
 
         data = ""
 
@@ -53,9 +47,11 @@ def get_college_data():
                 data += f"বিভাগ: {r['department']} | শিফট: {r['shift']} | সেমিস্টার: {r['semester']} | গ্রুপ: {r['group_name']} | দিন: {r['day']} | পিরিয়ড: {r['period']} | সময়: {r['start_time']} - {r['end_time']} PM | বিষয়: {r['subject']} | শিক্ষক: {r['teacher_short']} | রুম: {r['room']}\n"
 
         if notices.data:
-            data += "\n=== নোটিশ ===\n"
+            data += "\n=== সাম্প্রতিক নোটিশ ===\n"
             for n in notices.data:
-                data += f"তারিখ: {n['date']} | শিরোনাম: {n['title']} | বিবরণ: {n['content']}\n"
+                # Limit each notice to 200 chars only!
+                content = (n.get('content') or '')[:200]
+                data += f"• {n['title']}: {content}\n"
 
         if locations.data:
             data += "\n=== লোকেশন ===\n"
@@ -66,7 +62,8 @@ def get_college_data():
 
     except Exception as e:
         print(f"Database error: {e}")
-        return "ডেটাবেজ সংযোগে সমস্যা হয়েছে।"
+        return ""
+
 
 def build_system_prompt():
     college_data = get_college_data()
@@ -93,29 +90,40 @@ def build_system_prompt():
 === কলেজ তথ্য ===
 """ + college_data
 
+
 def clean_for_speech(text):
     text = re.sub(r'[^\w\s\u0980-\u09FF\u0020-\u007E]', '', text)
     text = re.sub(r'[\*\#\_\>\-\=\~\`]', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
+
 def get_response(messages):
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages
-    )
-    return response.choices[0].message.content
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            max_tokens=500  # limit response size too!
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Groq error: {e}")
+        return "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে আবার চেষ্টা করুন।"
 
 
 @app.route("/")
 def home():
     return render_template("index.html")
 
+
 @app.route("/ask", methods=["POST"])
 def ask():
     data = request.json
     user_input = data["message"]
     history = data.get("history", [])
+
+    # Limit history to last 6 messages only to save tokens!
+    history = history[-6:]
 
     messages = [{"role": "system", "content": build_system_prompt()}]
     messages += history
@@ -131,6 +139,7 @@ def ask():
     audio_base64 = base64.b64encode(audio_buffer.read()).decode('utf-8')
 
     return jsonify({"reply": reply, "audio": audio_base64})
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
