@@ -2,3 +2,6 @@ flask
 groq
 gtts
 supabase
+apscheduler
+requests
+beautifulsoup4

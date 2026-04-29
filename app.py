@@ -6,6 +6,9 @@ from flask import Flask, render_template, request, jsonify
 from groq import Groq
 from gtts import gTTS
 from supabase import create_client
+from apscheduler.schedulers.background import BackgroundScheduler
+from scraper import run_scraper
+
 
 app = Flask(__name__)
 
@@ -17,12 +20,12 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Auto fallback models
-MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
-    "llama-3.1-70b-versatile",
-]
+scheduler = BackgroundScheduler()
+scheduler.add_job(run_scraper, 'interval', hours=6)
+scheduler.start()
+
+MODEL = "llama-3.3-70b-versatile"
+
 
 def get_college_data():
     try:
@@ -97,19 +100,12 @@ def clean_for_speech(text):
     return text
 
 def get_response(messages):
-    for model in MODELS:
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            if "429" in str(e) or "rate_limit" in str(e).lower():
-                print(f"Model {model} rate limited, trying next...")
-                continue
-            raise e
-    return "দুঃখিত, এই মুহূর্তে সকল মডেল ব্যস্ত। কিছুক্ষণ পর আবার চেষ্টা করুন।"
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages
+    )
+    return response.choices[0].message.content
+
 
 @app.route("/")
 def home():
