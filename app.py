@@ -18,70 +18,94 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MODEL = "llama-3.3-70b-versatile"
 
-# Cache — fetch from Supabase once every 30 minutes only!
-_cache = {
-    "data": None,
-    "timestamp": 0
-}
 
-
-def get_college_data():
-    global _cache
-
-    # Return cached data if less than 30 minutes old
-    if _cache["data"] and (time.time() - _cache["timestamp"]) < 1800:
-        print("Using cached college data...")
-        return _cache["data"]
+# ==============================
+# SMART DATA FETCHING (RAG)
+# ==============================
+def get_relevant_data(user_question):
+    question_lower = user_question.lower()
+    data = ""
 
     try:
-        print("Fetching fresh data from Supabase...")
-        qa = supabase.table("qa").select("question, answer").limit(15).execute()
-        teachers = supabase.table("teachers").select("name, subject, short_name").limit(15).execute()
-        routines = supabase.table("routines").select("department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room").limit(25).execute()
-        notices = supabase.table("notices").select("title, content").limit(3).order("created_at", desc=True).execute()
-        locations = supabase.table("locations").select("name, description, floor").limit(15).execute()
+        # Routine related
+        if any(word in question_lower for word in [
+            "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
+            "কখন", "schedule", "তারিখ", "বার", "দিন"
+        ]):
+            routines = supabase.table("routines").select(
+                "department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room"
+            ).limit(25).execute()
+            if routines.data:
+                data += "=== ক্লাস রুটিন ===\n"
+                for r in routines.data:
+                    data += f"{r['department']}|{r['shift']}|{r['semester']}|{r['group_name']}|{r['day']}|{r['period']}|{r['start_time']}-{r['end_time']}|{r['subject']}|{r['teacher_short']}|{r['room']}\n"
 
-        data = ""
+        # Teacher related
+        if any(word in question_lower for word in [
+            "শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
+            "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "কে পড়ান"
+        ]):
+            teachers = supabase.table("teachers").select(
+                "name, subject, short_name, designation"
+            ).limit(20).execute()
+            if teachers.data:
+                data += "=== শিক্ষক তালিকা ===\n"
+                for t in teachers.data:
+                    data += f"{t['name']} | {t['subject']} | {t['short_name']} | {t['designation']}\n"
 
+        # Notice related
+        if any(word in question_lower for word in [
+            "নোটিশ", "বিজ্ঞপ্তি", "notice", "circular",
+            "ঘোষণা", "জানানো", "সর্বশেষ", "নতুন"
+        ]):
+            notices = supabase.table("notices").select(
+                "title, content, date"
+            ).limit(5).order("created_at", desc=True).execute()
+            if notices.data:
+                data += "=== সাম্প্রতিক নোটিশ ===\n"
+                for n in notices.data:
+                    content = (n.get('content') or '')[:200]
+                    data += f"• {n['title']} ({n['date']}): {content}\n"
+
+        # Location related
+        if any(word in question_lower for word in [
+            "কোথায়", "রুম", "ওয়াশরুম", "টয়লেট", "ক্যান্টিন",
+            "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor"
+        ]):
+            locations = supabase.table("locations").select(
+                "name, description, floor, building"
+            ).limit(15).execute()
+            if locations.data:
+                data += "=== লোকেশন ===\n"
+                for l in locations.data:
+                    data += f"{l['name']}: {l['description']} | তলা: {l['floor']} | বিল্ডিং: {l['building']}\n"
+
+        # Always include Q&A but limited
+        qa = supabase.table("qa").select(
+            "question, answer"
+        ).limit(10).execute()
         if qa.data:
-            data += "=== প্রশ্নোত্তর ===\n"
+            data += "\n=== সাধারণ প্রশ্নোত্তর ===\n"
             for item in qa.data:
                 data += f"প্রশ্ন: {item['question']}\nউত্তর: {item['answer']}\n\n"
 
-        if teachers.data:
-            data += "=== শিক্ষক তালিকা ===\n"
-            for t in teachers.data:
-                data += f"{t['name']} | {t['subject']} | {t['short_name']}\n"
+        # Fallback if nothing matched
+        if not data:
+            data = "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫। সরকারি পলিটেকনিক।"
 
-        if routines.data:
-            data += "\n=== ক্লাস রুটিন ===\n"
-            for r in routines.data:
-                data += f"{r['department']}|{r['shift']}|{r['semester']}|{r['group_name']}|{r['day']}|{r['period']}|{r['start_time']}-{r['end_time']}|{r['subject']}|{r['teacher_short']}|{r['room']}\n"
-
-        if notices.data:
-            data += "\n=== সাম্প্রতিক নোটিশ ===\n"
-            for n in notices.data:
-                content = (n.get('content') or '')[:150]
-                data += f"• {n['title']}: {content}\n"
-
-        if locations.data:
-            data += "\n=== লোকেশন ===\n"
-            for l in locations.data:
-                data += f"{l['name']}: {l['description']} | {l['floor']}\n"
-
-        # Update cache
-        _cache["data"] = data
-        _cache["timestamp"] = time.time()
-        print(f"Cache updated! Data size: {len(data)} chars")
+        print(f"Relevant data size: {len(data)} chars")
         return data
 
     except Exception as e:
-        print(f"Database error: {e}")
-        return _cache["data"] or ""
+        print(f"Data fetch error: {e}")
+        return "ডেটাবেজ সংযোগে সমস্যা হয়েছে।"
 
 
-def build_system_prompt():
-    college_data = get_college_data()
+# ==============================
+# SYSTEM PROMPT
+# ==============================
+def build_system_prompt(user_question=""):
+    relevant_data = get_relevant_data(user_question)
     return """
 তুমি ঢাকা পলিটেকনিক ইনস্টিটিউটের অফিশিয়াল AI সহকারী। তোমার নাম DPI Assistant।
 সবসময় বাংলায় উত্তর দাও।
@@ -114,9 +138,12 @@ def build_system_prompt():
 যদি সেই রুটিনের তথ্য না থাকে বলবে "এই রুটিনটি এখনো আমার কাছে নেই।"
 
 === কলেজ তথ্য ===
-""" + college_data
+""" + relevant_data
 
 
+# ==============================
+# HELPERS
+# ==============================
 def clean_for_speech(text):
     text = re.sub(r'[^\w\s\u0980-\u09FF\u0020-\u007E]', '', text)
     text = re.sub(r'[\*\#\_\>\-\=\~\`]', '', text)
@@ -147,6 +174,9 @@ def save_conversation(user_message, bot_reply):
         print(f"Conversation save error: {e}")
 
 
+# ==============================
+# ROUTES
+# ==============================
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -161,15 +191,17 @@ def ask():
     # Limit history to last 4 messages only
     history = history[-4:]
 
-    messages = [{"role": "system", "content": build_system_prompt()}]
+    # Smart fetch — only relevant data based on question
+    messages = [{"role": "system", "content": build_system_prompt(user_input)}]
     messages += history
     messages.append({"role": "user", "content": user_input})
 
     reply = get_response(messages)
 
-    # Save conversation to Supabase
+    # Save conversation
     save_conversation(user_input, reply)
 
+    # Generate audio
     clean_reply = clean_for_speech(reply)
     tts = gTTS(text=clean_reply, lang='bn')
     audio_buffer = BytesIO()
