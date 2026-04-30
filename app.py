@@ -16,7 +16,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "llama-3.3-70b-versatile"
 
 
 # ==============================
@@ -70,8 +70,11 @@ def get_relevant_data(user_question):
         # Location related
         if any(word in question_lower for word in [
             "কোথায়", "রুম", "ওয়াশরুম", "টয়লেট", "ক্যান্টিন",
-            "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "lab", "workshop", "floor"
-        ]):
+    "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor",
+    "lab", "laboratory", "center", "centre", "wiring",
+    "hardware", "electrical", "lab", "ল্যাব", "কেন্দ্র"
+]):
+       
             locations = supabase.table("locations").select(
                 "name, description, floor, building"
             ).limit(50).execute()
