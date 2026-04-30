@@ -74,7 +74,7 @@ def get_relevant_data(user_question):
         ]):
             locations = supabase.table("locations").select(
                 "name, description, floor, building"
-            ).limit(15).execute()
+            ).limit(50).execute()
             if locations.data:
                 data += "=== লোকেশন ===\n"
                 for l in locations.data:
