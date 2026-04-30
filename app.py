@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import base64
 from io import BytesIO
 from flask import Flask, render_template, request, jsonify
@@ -17,14 +18,28 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 MODEL = "llama-3.3-70b-versatile"
 
+# Cache — fetch from Supabase once every 30 minutes only!
+_cache = {
+    "data": None,
+    "timestamp": 0
+}
+
 
 def get_college_data():
+    global _cache
+
+    # Return cached data if less than 30 minutes old
+    if _cache["data"] and (time.time() - _cache["timestamp"]) < 1800:
+        print("Using cached college data...")
+        return _cache["data"]
+
     try:
-        qa = supabase.table("qa").select("question, answer").limit(20).execute()
-        teachers = supabase.table("teachers").select("name, subject, short_name, designation").limit(20).execute()
-        routines = supabase.table("routines").select("department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room").limit(30).execute()
-        notices = supabase.table("notices").select("title, content").limit(5).order("created_at", desc=True).execute()
-        locations = supabase.table("locations").select("name, description, floor, building").limit(20).execute()
+        print("Fetching fresh data from Supabase...")
+        qa = supabase.table("qa").select("question, answer").limit(15).execute()
+        teachers = supabase.table("teachers").select("name, subject, short_name").limit(15).execute()
+        routines = supabase.table("routines").select("department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room").limit(25).execute()
+        notices = supabase.table("notices").select("title, content").limit(3).order("created_at", desc=True).execute()
+        locations = supabase.table("locations").select("name, description, floor").limit(15).execute()
 
         data = ""
 
@@ -36,29 +51,33 @@ def get_college_data():
         if teachers.data:
             data += "=== শিক্ষক তালিকা ===\n"
             for t in teachers.data:
-                data += f"নাম: {t['name']} | বিষয়: {t['subject']} | সংক্ষেপ: {t['short_name']} | পদবি: {t['designation']}\n"
+                data += f"{t['name']} | {t['subject']} | {t['short_name']}\n"
 
         if routines.data:
             data += "\n=== ক্লাস রুটিন ===\n"
             for r in routines.data:
-                data += f"বিভাগ: {r['department']} | শিফট: {r['shift']} | সেমিস্টার: {r['semester']} | গ্রুপ: {r['group_name']} | দিন: {r['day']} | পিরিয়ড: {r['period']} | সময়: {r['start_time']} - {r['end_time']} PM | বিষয়: {r['subject']} | শিক্ষক: {r['teacher_short']} | রুম: {r['room']}\n"
+                data += f"{r['department']}|{r['shift']}|{r['semester']}|{r['group_name']}|{r['day']}|{r['period']}|{r['start_time']}-{r['end_time']}|{r['subject']}|{r['teacher_short']}|{r['room']}\n"
 
         if notices.data:
             data += "\n=== সাম্প্রতিক নোটিশ ===\n"
             for n in notices.data:
-                content = (n.get('content') or '')[:200]
+                content = (n.get('content') or '')[:150]
                 data += f"• {n['title']}: {content}\n"
 
         if locations.data:
             data += "\n=== লোকেশন ===\n"
             for l in locations.data:
-                data += f"{l['name']}: {l['description']} | তলা: {l['floor']} | বিল্ডিং: {l['building']}\n"
+                data += f"{l['name']}: {l['description']} | {l['floor']}\n"
 
+        # Update cache
+        _cache["data"] = data
+        _cache["timestamp"] = time.time()
+        print(f"Cache updated! Data size: {len(data)} chars")
         return data
 
     except Exception as e:
         print(f"Database error: {e}")
-        return ""
+        return _cache["data"] or ""
 
 
 def build_system_prompt():
@@ -69,11 +88,22 @@ def build_system_prompt():
 বন্ধুত্বপূর্ণ, আন্তরিক এবং সহায়ক হও।
 
 === অত্যন্ত গুরুত্বপূর্ণ নিয়ম ===
-তুমি শুধুমাত্র নিচের তথ্য থেকে উত্তর দেবে।
+তুমি শুধুমাত্র ঢাকা পলিটেকনিক ইনস্টিটিউট সম্পর্কিত প্রশ্নের উত্তর দেবে।
+শুধুমাত্র নিচের তথ্য থেকে উত্তর দেবে।
 যদি কোনো প্রশ্নের উত্তর নিচের তথ্যে না থাকে বলবে:
 "দুঃখিত, এই তথ্যটি আমার কাছে এখনো নেই। আমাদের টিমকে জানান।"
 নিজে থেকে কোনো তথ্য তৈরি করবে না বা অনুমান করবে না।
-কলেজের বাইরের কোনো প্রশ্নের উত্তর দেবে না।
+
+নিচের ধরনের প্রশ্নের উত্তর দেবে না:
+- রাজনৈতিক প্রশ্ন
+- ধর্মীয় বিতর্ক
+- অশ্লীল বা অসামাজিক প্রশ্ন
+- ব্যক্তিগত সম্পর্ক বা প্রেম সম্পর্কিত প্রশ্ন
+- কলেজের বাইরের যেকোনো বিষয়
+- হ্যাকিং বা অবৈধ কাজ
+
+এসব প্রশ্নে বিনয়ের সাথে বলবে:
+"দুঃখিত, আমি শুধুমাত্র ঢাকা পলিটেকনিক ইনস্টিটিউট সম্পর্কিত প্রশ্নের উত্তর দিতে পারি।"
 
 === রুটিন সম্পর্কিত বিশেষ নিয়ম ===
 যখন কেউ ক্লাস রুটিন সম্পর্কে জিজ্ঞেস করবে, সরাসরি রুটিন বলবে না।
@@ -99,12 +129,22 @@ def get_response(messages):
         response = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            max_tokens=500
+            max_tokens=400
         )
         return response.choices[0].message.content
     except Exception as e:
         print(f"Groq error: {e}")
         return "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে আবার চেষ্টা করুন।"
+
+
+def save_conversation(user_message, bot_reply):
+    try:
+        supabase.table("conversations").insert({
+            "user_message": user_message,
+            "bot_reply": bot_reply
+        }).execute()
+    except Exception as e:
+        print(f"Conversation save error: {e}")
 
 
 @app.route("/")
@@ -118,13 +158,17 @@ def ask():
     user_input = data["message"]
     history = data.get("history", [])
 
-    history = history[-6:]
+    # Limit history to last 4 messages only
+    history = history[-4:]
 
     messages = [{"role": "system", "content": build_system_prompt()}]
     messages += history
     messages.append({"role": "user", "content": user_input})
 
     reply = get_response(messages)
+
+    # Save conversation to Supabase
+    save_conversation(user_input, reply)
 
     clean_reply = clean_for_speech(reply)
     tts = gTTS(text=clean_reply, lang='bn')
