@@ -1,10 +1,14 @@
 import os
 import re
 import hashlib
+import base64
 import requests
 from datetime import datetime
 from supabase import create_client
+from mistralai.client import MistralClient
 from groq import Groq
+from pdf2image import convert_from_bytes
+import io
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -14,13 +18,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==============================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-OCR_API_KEY = os.environ.get("OCR_API_KEY")
+MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
 TARGET_URL = "https://dhaka.polytech.gov.bd/pages/notices"
-MAX_OCR_CHARS = 5000
+MAX_CHARS = 3000
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
 groq_client = Groq(api_key=GROQ_API_KEY)
 
 
@@ -31,11 +36,10 @@ def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def clean_ocr_text(text: str) -> str:
+def clean_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"Page\s+\d+", "", text, flags=re.I)
     text = re.sub(r"_{2,}|-{2,}", "", text)
-    return text.strip()[:MAX_OCR_CHARS]
+    return text.strip()[:MAX_CHARS]
 
 
 # ==============================
@@ -66,7 +70,7 @@ def get_pdf_links():
     pdf_links = []
     seen = set()
 
-    # Extract markdown links with PDF URLs — [Title](URL.pdf)
+    # Markdown links with PDF URLs
     md_pattern = r'\[([^\]]+)\]\((https?://[^\)]+\.pdf)\)'
     md_matches = re.findall(md_pattern, text, re.IGNORECASE)
 
@@ -78,7 +82,7 @@ def get_pdf_links():
                 "url": url.strip()
             })
 
-    # Also grab raw PDF links not in markdown format
+    # Raw PDF links
     raw_pattern = r'https?://[^\s\)\]]+\.pdf'
     raw_links = re.findall(raw_pattern, text, re.IGNORECASE)
 
@@ -92,64 +96,78 @@ def get_pdf_links():
                 "url": url
             })
 
-    print(f"Found {len(pdf_links)} PDF links")
+    print(f"Found {len(pdf_links)} PDFs")
     return pdf_links
 
 
 # ==============================
-# STEP 2 — OCR the PDF
+# STEP 2 — Mistral OCR
 # ==============================
-def ocr_pdf(pdf_url: str):
-    if not OCR_API_KEY:
-        print("No OCR API key!")
-        return None
-
+def ocr_with_mistral(pdf_url: str):
     try:
-        print(f"Running OCR...")
-        payload = {
-            "url": pdf_url,
-            "apikey": OCR_API_KEY,
-            "OCREngine": 2,
-            "scale": True,
-            "detectOrientation": True,
-            "isOverlayRequired": False,
-            # No language — auto detect works best for Bengali!
-        }
-        response = requests.post(
-            "https://api.ocr.space/parse/image",
-            data=payload,
-            timeout=60,
-        )
-        result = response.json()
-
-        if result.get("IsErroredOnProcessing"):
-            print(f"OCR error: {result.get('ErrorMessage')}")
+        print(f"Downloading PDF: {pdf_url[:60]}...")
+        response = requests.get(pdf_url, timeout=30, verify=False)
+        if response.status_code != 200:
             return None
 
-        parsed = result.get("ParsedResults", [])
-        if not parsed:
-            print("No OCR results!")
-            return None
+        pdf_bytes = response.content
+        print(f"PDF size: {len(pdf_bytes)} bytes")
 
-        text = parsed[0].get("ParsedText", "")
-        cleaned = clean_ocr_text(text)
-        print(f"OCR extracted {len(cleaned)} characters")
+        # Convert PDF to images
+        print("Converting PDF to images...")
+        images = convert_from_bytes(pdf_bytes, first_page=1, last_page=2)
+
+        all_text = []
+
+        for i, image in enumerate(images):
+            print(f"Processing page {i+1}...")
+
+            # Convert image to base64
+            img_buffer = io.BytesIO()
+            image.save(img_buffer, format="JPEG")
+            img_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+
+            result = mistral_client.chat(
+                model="pixtral-12b-2409",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": f"data:image/jpeg;base64,{img_base64}"
+                            },
+                            {
+                                "type": "text",
+                                "text": "এই ছবি থেকে সমস্ত বাংলা ও ইংরেজি টেক্সট বের করো। শুধু টেক্সট দাও।"
+                            }
+                        ]
+                    }
+                ]
+            )
+
+            text = result.choices[0].message.content.strip()
+            all_text.append(text)
+
+        full_text = "\n".join(all_text)
+        cleaned = clean_text(full_text)
+        print(f"Extracted {len(cleaned)} characters")
         return cleaned
 
     except Exception as e:
-        print(f"OCR error: {e}")
+        print(f"Mistral OCR error: {e}")
         return None
 
 
 # ==============================
-# STEP 3 — AI Summarize (once!)
+# STEP 3 — AI Summarize
 # ==============================
 def summarize_with_ai(title: str, ocr_text: str) -> str:
     if not ocr_text or len(ocr_text) < 20:
         return f"নোটিশ: {title}"
 
     try:
-        print("Summarizing with AI...")
+        print("Summarizing with Groq...")
         response = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
@@ -165,11 +183,11 @@ def summarize_with_ai(title: str, ocr_text: str) -> str:
             max_tokens=300
         )
         summary = response.choices[0].message.content.strip()
-        print(f"Summary: {summary[:80]}...")
+        print(f"Summary done: {summary[:60]}...")
         return summary
 
     except Exception as e:
-        print(f"AI summarize error: {e}")
+        print(f"Summarize error: {e}")
         return f"নোটিশ: {title}\n\n{ocr_text[:300]}"
 
 
@@ -219,7 +237,6 @@ def run_scraper():
         print("No PDFs found!")
         return 0
 
-    # Only latest 5
     latest = pdf_links[:5]
     print(f"\nProcessing latest {len(latest)} PDFs...")
     saved = 0
@@ -229,29 +246,26 @@ def run_scraper():
         url = item["url"]
 
         print(f"\n[{i+1}] {title[:60]}...")
-        print(f"URL: {url[:70]}...")
 
-        # Step 2 — OCR
-        ocr_text = ocr_pdf(url)
+        # Step 2 — Mistral OCR
+        ocr_text = ocr_with_mistral(url)
 
         if not ocr_text:
             print("OCR failed, saving with link only...")
             summary = f"নোটিশ: {title}\nবিস্তারিত দেখুন: {url}"
         else:
-            # Step 3 — AI summarize once
+            # Step 3 — Summarize
             summary = summarize_with_ai(title, ocr_text)
 
-        # Check duplicate
         content_hash = sha256((ocr_text or title) + url)
 
         if notice_exists(content_hash):
             print("Already exists, skipping...")
             continue
 
-        # Step 4 — Save
         if save_notice(title, ocr_text, summary, url, content_hash):
             saved += 1
-            print(f"Saved!")
+            print("Saved!")
         else:
             print("Failed to save!")
 

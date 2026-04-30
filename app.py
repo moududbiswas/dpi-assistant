@@ -9,10 +9,8 @@ from supabase import create_client
 
 app = Flask(__name__)
 
-# Groq client
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 
-# Supabase client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -22,7 +20,6 @@ MODEL = "llama-3.3-70b-versatile"
 
 def get_college_data():
     try:
-        # Strict limits to prevent token overflow!
         qa = supabase.table("qa").select("question, answer").limit(20).execute()
         teachers = supabase.table("teachers").select("name, subject, short_name, designation").limit(20).execute()
         routines = supabase.table("routines").select("department, shift, semester, group_name, day, period, start_time, end_time, subject, teacher_short, room").limit(30).execute()
@@ -49,7 +46,6 @@ def get_college_data():
         if notices.data:
             data += "\n=== সাম্প্রতিক নোটিশ ===\n"
             for n in notices.data:
-                # Limit each notice to 200 chars only!
                 content = (n.get('content') or '')[:200]
                 data += f"• {n['title']}: {content}\n"
 
@@ -103,7 +99,7 @@ def get_response(messages):
         response = client.chat.completions.create(
             model=MODEL,
             messages=messages,
-            max_tokens=500  # limit response size too!
+            max_tokens=500
         )
         return response.choices[0].message.content
     except Exception as e:
@@ -122,7 +118,6 @@ def ask():
     user_input = data["message"]
     history = data.get("history", [])
 
-    # Limit history to last 6 messages only to save tokens!
     history = history[-6:]
 
     messages = [{"role": "system", "content": build_system_prompt()}]

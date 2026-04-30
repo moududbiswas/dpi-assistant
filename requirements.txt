@@ -2,6 +2,7 @@ flask
 groq
 gtts
 supabase
-apscheduler
+mistralai==0.4.2
 requests
-beautifulsoup4
+pdf2image
+pillow
