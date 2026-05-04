@@ -77,7 +77,7 @@ def get_relevant_data(user_question):
        
             locations = supabase.table("locations").select(
                 "name, description, floor, building"
-            ).limit(50).execute()
+            ).limit(97).execute()
             if locations.data:
                 data += "=== লোকেশন ===\n"
                 for l in locations.data:
@@ -86,7 +86,7 @@ def get_relevant_data(user_question):
         # Always include Q&A but limited
         qa = supabase.table("qa").select(
             "question, answer"
-        ).limit(10).execute()
+        ).limit(15).execute()
         if qa.data:
             data += "\n=== সাধারণ প্রশ্নোত্তর ===\n"
             for item in qa.data:
