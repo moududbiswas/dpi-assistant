@@ -86,7 +86,7 @@ def get_relevant_data(user_question):
         # Always include Q&A but limited
         qa = supabase.table("qa").select(
             "question, answer"
-        ).limit(15).execute()
+        ).limit(100).execute()
         if qa.data:
             data += "\n=== সাধারণ প্রশ্নোত্তর ===\n"
             for item in qa.data:
