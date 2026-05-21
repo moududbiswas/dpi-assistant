@@ -41,19 +41,26 @@ def get_relevant_data(user_question):
                 for r in rows.data:
                     data += f"{r['department']}|{r['shift']}|{r['semester']}|{r['group_name']}|{r['day']}|{r['period']}|{r['start_time']}-{r['end_time']}|{r['subject']}|{r['teacher_short']}|{r['room']}\n"
 
-        # Teacher — expanded keywords + partial matching
+        # Teacher — broad keyword net covering designations, departments, English terms
         if any(w in q for w in [
             "শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
-            "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক"
+            "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
+            "chief", "head", "department", "dept", "hod",
+            "বিভাগ", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
+            "civil", "electrical", "computer", "mechanical",
+            "architecture", "electronics", "chemical", "textile",
+            "সিভিল", "ইলেকট্রিক্যাল", "কম্পিউটার", "আর্কিটেকচার",
+            "who is", "কে আছেন", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
         ]):
             rows = supabase.table("teachers").select(
-                "name,subject,short_name,designation"
-            ).limit(20).execute()
+                "name,subject,short_name,designation,department"
+            ).limit(100).execute()
             if rows.data:
                 data += "=== শিক্ষক তালিকা ===\n"
                 for t in rows.data:
-                    data += f"{t['name']} | {t['subject']} | {t['short_name']} | {t['designation']}\n"
+                    dept = t.get("department") or ""
+                    data += f"{t['name']} | {t['designation']} | {t['subject']} | {t['short_name']} | বিভাগ: {dept}\n"
 
         # Notice
         if any(w in q for w in [
@@ -119,6 +126,32 @@ def build_system_prompt(user_question=""):
 
 === তথ্য ===
 {relevant_data}"""
+
+
+# ==============================
+# GEMINI RESPONSE
+# ==============================
+def get_response(system_prompt, history, user_input):
+    try:
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            system_instruction=system_prompt,
+            generation_config={"max_output_tokens": 1000}
+        )
+
+        # Convert history: "assistant" → "model" for Gemini
+        gemini_history = []
+        for msg in history:
+            role = "model" if msg["role"] == "assistant" else "user"
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
+
+        chat = model.start_chat(history=gemini_history)
+        response = chat.send_message(user_input)
+        return response.text
+
+    except Exception as e:
+        print(f"Gemini error: {e}")
+        return "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে চেষ্টা করুন।"
 
 
 # ==============================
