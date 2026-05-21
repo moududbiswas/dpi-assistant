@@ -30,9 +30,9 @@
             --user-bg:  #1a2f8a;
             --ai-bg:    #ffffff;
         }
- 
+
         * { margin:0; padding:0; box-sizing:border-box; }
- 
+
         body {
             font-family: 'Hind Siliguri', sans-serif;
             background: var(--bg-main);
@@ -43,7 +43,7 @@
             overflow: hidden;
             position: relative;
         }
- 
+
         /* Subtle blueprint grid background */
         body::before {
             content: '';
@@ -56,7 +56,7 @@
             pointer-events: none;
             z-index: 0;
         }
- 
+
         /* Decorative corner gear */
         body::after {
             content: '';
@@ -70,7 +70,7 @@
             pointer-events: none;
             z-index: 0;
         }
- 
+
         /* ── HEADER ── */
         header {
             position: relative;
@@ -84,7 +84,7 @@
             flex-shrink: 0;
             box-shadow: 0 1px 0 var(--border), 0 2px 12px rgba(26,47,138,0.07);
         }
- 
+
         /* Subtle navy left accent bar */
         header::before {
             content: '';
@@ -93,7 +93,7 @@
             height: 3px;
             background: linear-gradient(90deg, var(--navy-d), var(--navy-l), var(--cyan));
         }
- 
+
         .logo-wrap {
             width: 42px;
             height: 42px;
@@ -114,7 +114,7 @@
             object-fit: contain;
             display: block;
         }
- 
+
         .header-text h1 {
             font-family: 'Rajdhani', sans-serif;
             font-size: 17px;
@@ -128,7 +128,7 @@
             margin-top: 1px;
             letter-spacing: 0.3px;
         }
- 
+
         .status-pill {
             margin-left: auto;
             display: flex;
@@ -157,9 +157,9 @@
             0%,100% { opacity:1; transform:scale(1); }
             50%      { opacity:0.5; transform:scale(0.7); }
         }
- 
- 
- 
+
+
+
         /* ── CHAT BOX ── */
         #chatbox {
             flex: 1;
@@ -176,7 +176,7 @@
         #chatbox::-webkit-scrollbar { width: 5px; }
         #chatbox::-webkit-scrollbar-track { background: transparent; }
         #chatbox::-webkit-scrollbar-thumb { background: var(--sky-d); border-radius: 10px; }
- 
+
         /* ── WELCOME ── */
         .welcome {
             text-align: center;
@@ -219,7 +219,7 @@
             line-height: 1.75;
             margin-bottom: 28px;
         }
- 
+
         .quick-btns {
             display: flex;
             flex-wrap: wrap;
@@ -246,7 +246,7 @@
             transform: translateY(-2px);
             box-shadow: var(--shadow);
         }
- 
+
         /* ── MESSAGES ── */
         .msg-row {
             display: flex;
@@ -261,7 +261,7 @@
             to   { opacity:1; transform:translateY(0); }
         }
         .msg-row.user { flex-direction: row-reverse; }
- 
+
         .avatar {
             width: 36px;
             height: 36px;
@@ -287,7 +287,7 @@
             font-size: 16px;
             box-shadow: var(--shadow-sm);
         }
- 
+
         .bubble {
             max-width: 72%;
             padding: 13px 18px;
@@ -310,7 +310,7 @@
             color: white;
             box-shadow: var(--shadow);
         }
- 
+
         /* ── TYPING INDICATOR ── */
         .typing-bubble {
             background: white;
@@ -347,32 +347,8 @@
             font-style: italic;
             letter-spacing: 0.2px;
         }
- 
-        /* ── SPEAKING WAVE ── */
-        .speaking-wave {
-            display: inline-flex;
-            gap: 2px;
-            align-items: flex-end;
-            margin-left: 10px;
-            height: 14px;
-            vertical-align: middle;
-        }
-        .wave-bar {
-            width: 3px;
-            border-radius: 3px;
-            background: var(--navy-l);
-            animation: wave 0.8s ease-in-out infinite;
-        }
-        .wave-bar:nth-child(1) { height: 7px;  animation-delay: 0s; }
-        .wave-bar:nth-child(2) { height: 12px; animation-delay: 0.1s; }
-        .wave-bar:nth-child(3) { height: 9px;  animation-delay: 0.2s; }
-        .wave-bar:nth-child(4) { height: 14px; animation-delay: 0.3s; }
-        .wave-bar:nth-child(5) { height: 7px;  animation-delay: 0.4s; }
-        @keyframes wave {
-            0%,100% { transform:scaleY(0.3); opacity:0.4; }
-            50%     { transform:scaleY(1); opacity:1; }
-        }
- 
+
+
         /* ── INPUT AREA ── */
         .input-area {
             position: relative;
@@ -416,7 +392,7 @@
             padding-top: 3px;
         }
         #userInput::placeholder { color: var(--text-muted); }
- 
+
         .send-btn {
             width: 40px;
             height: 40px;
@@ -438,7 +414,7 @@
         }
         .send-btn:active { transform: scale(0.93); }
         .send-btn svg { width:18px; height:18px; fill:white; }
- 
+
         .input-hint {
             text-align: center;
             font-size: 10.5px;
@@ -446,7 +422,7 @@
             margin-top: 10px;
             letter-spacing: 0.3px;
         }
- 
+
         /* ── MOBILE ── */
         @media (max-width: 640px) {
             header { padding: 0 14px; height: 58px; }
@@ -459,7 +435,7 @@
     </style>
 </head>
 <body>
- 
+
 <header>
     <div class="logo-wrap">
         <img src="/static/image/WhatsApp Image 2026-05-13 at 3.29.25 PM.jpeg" alt="DPI Logo">
@@ -473,8 +449,8 @@
         <span id="statusText">অনলাইন</span>
     </div>
 </header>
- 
- 
+
+
 <div id="chatbox">
     <div class="welcome" id="welcome">
         <div class="welcome-logo">
@@ -490,7 +466,7 @@
         </div>
     </div>
 </div>
- 
+
 <div class="input-area">
     <div class="input-wrapper">
         <textarea id="userInput" placeholder="আপনার প্রশ্ন লিখুন..." rows="1"></textarea>
@@ -500,14 +476,13 @@
     </div>
     <div class="input-hint">Enter চাপুন বা বোতামে ক্লিক করুন · Shift+Enter নতুন লাইন</div>
 </div>
- 
+
 <script>
     // Logo base64 - same data used in CSS
     const LOGO_SRC = "/static/image/WhatsApp Image 2026-05-13 at 3.29.25 PM.jpeg";
- 
+
     let history = [];
-    let isPlaying = false;
- 
+
     const textarea = document.getElementById('userInput');
     textarea.addEventListener('input', function() {
         this.style.height = 'auto';
@@ -516,20 +491,20 @@
     textarea.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
- 
+
     function quickAsk(text) {
         document.getElementById('userInput').value = text;
         sendMessage();
     }
- 
+
     function addMessage(content, role) {
         const welcome = document.getElementById('welcome');
         if (welcome) welcome.remove();
- 
+
         const chatbox = document.getElementById('chatbox');
         const row = document.createElement('div');
         row.className = 'msg-row ' + role;
- 
+
         const avatar = document.createElement('div');
         avatar.className = 'avatar ' + role;
         if (role === 'ai') {
@@ -537,31 +512,31 @@
         } else {
             avatar.textContent = '🧑';
         }
- 
+
         const bubble = document.createElement('div');
         bubble.className = 'bubble ' + role;
         bubble.innerHTML = content;
- 
+
         row.appendChild(avatar);
         row.appendChild(bubble);
         chatbox.appendChild(row);
         chatbox.scrollTop = chatbox.scrollHeight;
         return bubble;
     }
- 
+
     function addTyping() {
         const welcome = document.getElementById('welcome');
         if (welcome) welcome.remove();
- 
+
         const chatbox = document.getElementById('chatbox');
         const row = document.createElement('div');
         row.className = 'msg-row ai';
         row.id = 'typing-row';
- 
+
         const avatar = document.createElement('div');
         avatar.className = 'avatar ai';
         avatar.innerHTML = '<img src="' + LOGO_SRC + '" alt="DPI">';
- 
+
         const bubble = document.createElement('div');
         bubble.className = 'typing-bubble';
         bubble.innerHTML = `
@@ -572,62 +547,40 @@
             </div>
             <span class="typing-label">ভাবছি...</span>
         `;
- 
+
         row.appendChild(avatar);
         row.appendChild(bubble);
         chatbox.appendChild(row);
         chatbox.scrollTop = chatbox.scrollHeight;
     }
- 
-    function playAudio(base64) {
-        const audio = new Audio("data:audio/mp3;base64," + base64);
-        isPlaying = true;
-        audio.play();
-        audio.onended = () => { isPlaying = false; };
-        return audio;
-    }
- 
+
+
     async function sendMessage() {
         const input = document.getElementById('userInput');
         const message = input.value.trim();
-        if (!message || isPlaying) return;
- 
+        if (!message) return;
+
         input.value = '';
         input.style.height = 'auto';
- 
+
         addMessage(message, 'user');
         addTyping();
- 
+
         try {
             const res = await fetch('/ask', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ message, history })
             });
- 
+
             const data = await res.json();
             document.getElementById('typing-row')?.remove();
- 
-            const waveHTML = `<span class="speaking-wave">
-                <div class="wave-bar"></div><div class="wave-bar"></div>
-                <div class="wave-bar"></div><div class="wave-bar"></div>
-                <div class="wave-bar"></div>
-            </span>`;
- 
-            const bubble = addMessage(data.reply + waveHTML, 'ai');
- 
+
+            addMessage(data.reply, 'ai');
+
             history.push({ role: 'user', content: message });
             history.push({ role: 'assistant', content: data.reply });
- 
-            if (data.audio) {
-                const audio = playAudio(data.audio);
-                audio.onended = () => {
-                    isPlaying = false;
-                    const wave = bubble.querySelector('.speaking-wave');
-                    if (wave) wave.remove();
-                };
-            }
- 
+
         } catch (err) {
             document.getElementById('typing-row')?.remove();
             addMessage('⚠️ সংযোগে সমস্যা হয়েছে। আবার চেষ্টা করুন।', 'ai');
@@ -636,4 +589,3 @@
 </script>
 </body>
 </html>
- 
