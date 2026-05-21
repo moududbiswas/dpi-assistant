@@ -139,7 +139,6 @@ def get_response(system_prompt, history, user_input):
             generation_config={"max_output_tokens": 1000}
         )
 
-        # Convert history: "assistant" → "model" for Gemini
         gemini_history = []
         for msg in history:
             role = "model" if msg["role"] == "assistant" else "user"
@@ -150,9 +149,11 @@ def get_response(system_prompt, history, user_input):
         return response.text
 
     except Exception as e:
-        print(f"Gemini error: {e}")
-        return "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে চেষ্টা করুন।"
-
+        # Force flush ensures it prints to Render logs instantly
+        print(f"CRITICAL GEMINI ERROR: {e}", flush=True) 
+        
+        # Temporarily return the raw error message to the UI for testing
+        return f"⚠️ SDK Error: {str(e)}"
 
 # ==============================
 # HELPERS
