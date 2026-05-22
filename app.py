@@ -182,7 +182,7 @@ def search_routines(q_raw, ctx):
                 if r.data:
                     return r.data
  
-        result = query.limit(30).execute()
+        result = query.limit(100).execute()
         return result.data or []
  
     except Exception as e:
@@ -226,7 +226,7 @@ def search_locations(q_raw, ctx):
                 if ctx["floor"]:
                     query = query.ilike("floor", f"%{ctx['floor']}%")
  
-                result = query.limit(15).execute()
+                result = query.limit(200).execute()
                 if result.data:
                     return result.data
  
@@ -241,7 +241,7 @@ def search_locations(q_raw, ctx):
         # Fallback: return all locations
         result = supabase.table("locations").select(
             "name,description,floor,building"
-        ).limit(97).execute()
+        ).limit(100).execute()
         return result.data or []
  
     except Exception as e:
@@ -257,7 +257,7 @@ def search_qa(q_raw):
         # First try to find matching question
         result = supabase.table("qa").select(
             "question,answer"
-        ).ilike("question", f"%{q_raw[:50]}%").limit(10).execute()
+        ).ilike("question", f"%{q_raw[:50]}%").limit(100).execute()
  
         if result.data:
             return result.data
