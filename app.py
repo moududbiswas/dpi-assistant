@@ -110,7 +110,7 @@ def search_teachers(q_raw, ctx):
         if ctx["short_names"]:
             for sn in ctx["short_names"]:
                 query = supabase.table("teachers").select(
-                    "name,subject,short_name,designation,department,shift"
+                    "name,subject,short_name,designation,department,shift,contact_number"
                 ).or_(
                     f"short_name.ilike.%{sn}%,"
                     f"name.ilike.%{sn}%"
@@ -129,7 +129,7 @@ def search_teachers(q_raw, ctx):
         # General search by department
         if not results:
             query = supabase.table("teachers").select(
-                "name,subject,short_name,designation,department,shift"
+                "name,subject,short_name,designation,department,shift,contact_number"
             )
             if ctx["department"]:
                 query = query.ilike("department", f"%{ctx['department']}%")
@@ -314,7 +314,8 @@ def get_relevant_data(user_question):
                         f"{t['name']} | {t['designation']} | "
                         f"{t['subject']} | {t['short_name']} | "
                         f"বিভাগ: {t.get('department','')} | "
-                        f"শিফট: {t.get('shift','')}\n"
+                        f"শিফট: {t.get('shift','')} | "
+                        f"যোগাযোগ: {t.get('contact_number','')}\n"
                     )
  
         # --- NOTICE ---
