@@ -1,20 +1,19 @@
+
 import os
 from flask import Flask, render_template, request, jsonify
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from supabase import create_client
  
 app = Flask(__name__)
  
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("ERROR: GEMINI_API_KEY is not set in environment variables!", flush=True)
+    print("ERROR: GEMINI_API_KEY is not set!", flush=True)
 else:
     print("GEMINI_API_KEY loaded OK", flush=True)
  
-client = genai.Client(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-2.5-flash"
- 
+genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -143,30 +142,23 @@ def log_error(error_type, user_message, error_detail):
  
  
 # ==============================
-# GEMINI RESPONSE (new google-genai SDK)
+# GEMINI RESPONSE
 # ==============================
 def get_response(system_prompt, history, user_input):
     try:
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL,
+            system_instruction=system_prompt,
+            generation_config={"max_output_tokens": 1000}
+        )
+ 
         gemini_history = []
         for msg in history:
             role = "model" if msg["role"] == "assistant" else "user"
-            gemini_history.append(
-                types.Content(role=role, parts=[types.Part(text=msg["content"])])
-            )
+            gemini_history.append({"role": role, "parts": [msg["content"]]})
  
-        # Add current user message
-        gemini_history.append(
-            types.Content(role="user", parts=[types.Part(text=user_input)])
-        )
- 
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=gemini_history,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                max_output_tokens=1000
-            )
-        )
+        chat = model.start_chat(history=gemini_history)
+        response = chat.send_message(user_input)
         return response.text, None
  
     except Exception as e:
