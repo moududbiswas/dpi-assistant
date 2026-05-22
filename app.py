@@ -1,19 +1,19 @@
 import os
-import re
 from flask import Flask, render_template, request, jsonify
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from supabase import create_client
  
 app = Flask(__name__)
  
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("ERROR: GEMINI_API_KEY is not set in environment variables!")
+    print("ERROR: GEMINI_API_KEY is not set in environment variables!", flush=True)
 else:
-    print("GEMINI_API_KEY loaded OK")
+    print("GEMINI_API_KEY loaded OK", flush=True)
  
-genai.configure(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-1.5-flash-latest" # updated model
+client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_MODEL = "gemini-2.0-flash"
  
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -101,7 +101,7 @@ def get_relevant_data(user_question):
         if not data:
             data = "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫।"
  
-        print(f"RAG data: {len(data)} chars")
+        print(f"RAG data: {len(data)} chars", flush=True)
         return data
  
     except Exception as e:
@@ -143,23 +143,30 @@ def log_error(error_type, user_message, error_detail):
  
  
 # ==============================
-# GEMINI RESPONSE
+# GEMINI RESPONSE (new google-genai SDK)
 # ==============================
 def get_response(system_prompt, history, user_input):
     try:
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL,
-            system_instruction=system_prompt,
-            generation_config={"max_output_tokens": 1000}
-        )
- 
         gemini_history = []
         for msg in history:
             role = "model" if msg["role"] == "assistant" else "user"
-            gemini_history.append({"role": role, "parts": [msg["content"]]})
+            gemini_history.append(
+                types.Content(role=role, parts=[types.Part(text=msg["content"])])
+            )
  
-        chat = model.start_chat(history=gemini_history)
-        response = chat.send_message(user_input)
+        # Add current user message
+        gemini_history.append(
+            types.Content(role="user", parts=[types.Part(text=user_input)])
+        )
+ 
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=gemini_history,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                max_output_tokens=1000
+            )
+        )
         return response.text, None
  
     except Exception as e:
@@ -199,7 +206,7 @@ def ask():
         user_input = data["message"]
         history = data.get("history", [])[-4:]
  
-        print(f"User input: {user_input[:80]}")
+        print(f"User input: {user_input[:80]}", flush=True)
  
         system_prompt = build_system_prompt(user_input)
         reply, error = get_response(system_prompt, history, user_input)
@@ -208,7 +215,7 @@ def ask():
             log_error("GEMINI_ERROR", user_input, error)
             return jsonify({"reply": "দুঃখিত, এই মুহূর্তে উত্তর দিতে পারছি না। একটু পরে চেষ্টা করুন।"})
  
-        print(f"Reply: {reply[:80]}")
+        print(f"Reply: {reply[:80]}", flush=True)
         save_conversation(user_input, reply)
         return jsonify({"reply": reply})
  
@@ -222,3 +229,4 @@ def ask():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+ 
