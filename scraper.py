@@ -5,8 +5,7 @@ import base64
 import requests
 from datetime import datetime
 from supabase import create_client
-from mistralai.client import MistralClient
-from groq import Groq
+import google.generativeai as genai
 from pdf2image import convert_from_bytes
 import io
 
@@ -18,15 +17,14 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==============================
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 TARGET_URL = "https://dhaka.polytech.gov.bd/pages/notices"
-MAX_CHARS = 3000
+MAX_CHARS = 5000
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-mistral_client = MistralClient(api_key=MISTRAL_API_KEY)
-groq_client = Groq(api_key=GROQ_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
 
 # ==============================
@@ -77,10 +75,7 @@ def get_pdf_links():
     for title, url in md_matches:
         if url not in seen:
             seen.add(url)
-            pdf_links.append({
-                "title": title.strip(),
-                "url": url.strip()
-            })
+            pdf_links.append({"title": title.strip(), "url": url.strip()})
 
     # Raw PDF links
     raw_pattern = r'https?://[^\s\)\]]+\.pdf'
@@ -91,108 +86,93 @@ def get_pdf_links():
             seen.add(url)
             filename = url.split("/")[-1].replace(".pdf", "")
             filename = re.sub(r'[-_]', ' ', filename)
-            pdf_links.append({
-                "title": filename[:80],
-                "url": url
-            })
+            pdf_links.append({"title": filename[:80], "url": url})
 
     print(f"Found {len(pdf_links)} PDFs")
     return pdf_links
 
 
 # ==============================
-# STEP 2 — Mistral OCR
+# STEP 2 — Gemini OCR + Summarize (single call per page)
 # ==============================
-def ocr_with_mistral(pdf_url: str):
+def ocr_and_summarize_with_gemini(title: str, pdf_url: str):
+    """
+    Downloads PDF → converts to images → sends to Gemini.
+    OCR + summarization in ONE call per page. No separate summarize step needed.
+    Returns (raw_text, summary)
+    """
     try:
         print(f"Downloading PDF: {pdf_url[:60]}...")
         response = requests.get(pdf_url, timeout=30, verify=False)
         if response.status_code != 200:
-            return None
+            print(f"Download failed: {response.status_code}")
+            return None, None
 
         pdf_bytes = response.content
         print(f"PDF size: {len(pdf_bytes)} bytes")
 
-        # Convert PDF to images
         print("Converting PDF to images...")
         images = convert_from_bytes(pdf_bytes, first_page=1, last_page=2)
 
-        all_text = []
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        all_raw_text = []
+        all_summaries = []
 
         for i, image in enumerate(images):
-            print(f"Processing page {i+1}...")
+            print(f"Processing page {i+1} with Gemini...")
 
             # Convert image to base64
             img_buffer = io.BytesIO()
             image.save(img_buffer, format="JPEG")
-            img_base64 = base64.b64encode(img_buffer.getvalue()).decode("utf-8")
+            img_bytes = img_buffer.getvalue()
 
-            result = mistral_client.chat(
-                model="pixtral-12b-2409",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": f"data:image/jpeg;base64,{img_base64}"
-                            },
-                            {
-                                "type": "text",
-                                "text": "এই ছবি থেকে সমস্ত বাংলা ও ইংরেজি টেক্সট বের করো। শুধু টেক্সট দাও।"
-                            }
-                        ]
-                    }
-                ]
-            )
-
-            text = result.choices[0].message.content.strip()
-            all_text.append(text)
-
-        full_text = "\n".join(all_text)
-        cleaned = clean_text(full_text)
-        print(f"Extracted {len(cleaned)} characters")
-        return cleaned
-
-    except Exception as e:
-        print(f"Mistral OCR error: {e}")
-        return None
-
-
-# ==============================
-# STEP 3 — AI Summarize
-# ==============================
-def summarize_with_ai(title: str, ocr_text: str) -> str:
-    if not ocr_text or len(ocr_text) < 20:
-        return f"নোটিশ: {title}"
-
-    try:
-        print("Summarizing with Groq...")
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
+            # Gemini vision — OCR + summarize in one shot
+            response = model.generate_content([
                 {
-                    "role": "system",
-                    "content": "তুমি একটি নোটিশ সারসংক্ষেপকারী। বাংলায় ৩-৪ বাক্যে নোটিশের মূল বিষয় সংক্ষেপ করো। শুধু গুরুত্বপূর্ণ তথ্য রাখো।"
+                    "mime_type": "image/jpeg",
+                    "data": base64.b64encode(img_bytes).decode("utf-8")
                 },
-                {
-                    "role": "user",
-                    "content": f"এই নোটিশটি সংক্ষেপ করো:\n\nশিরোনাম: {title}\n\nবিষয়বস্তু:\n{ocr_text[:2000]}"
-                }
-            ],
-            max_tokens=300
-        )
-        summary = response.choices[0].message.content.strip()
-        print(f"Summary done: {summary[:60]}...")
-        return summary
+                f"""এই নোটিশ পেজ থেকে দুইটি কাজ করো:
+
+১. RAW_TEXT: সমস্ত বাংলা ও ইংরেজি টেক্সট হুবহু বের করো।
+২. SUMMARY: ৩-৪ বাক্যে বাংলায় নোটিশের মূল বিষয় সংক্ষেপ করো।
+
+এই ফরম্যাটে দাও:
+RAW_TEXT:
+[এখানে সব টেক্সট]
+
+SUMMARY:
+[এখানে সংক্ষেপ]
+
+নোটিশের শিরোনাম: {title}"""
+            ])
+
+            result_text = response.text.strip()
+
+            # Parse RAW_TEXT and SUMMARY from response
+            raw_match = re.search(r'RAW_TEXT:\s*(.*?)(?=SUMMARY:|$)', result_text, re.DOTALL)
+            summary_match = re.search(r'SUMMARY:\s*(.*?)$', result_text, re.DOTALL)
+
+            raw = raw_match.group(1).strip() if raw_match else result_text
+            summary = summary_match.group(1).strip() if summary_match else ""
+
+            all_raw_text.append(raw)
+            if summary:
+                all_summaries.append(summary)
+
+        full_raw = clean_text("\n".join(all_raw_text))
+        full_summary = " ".join(all_summaries) if all_summaries else f"নোটিশ: {title}"
+
+        print(f"OCR: {len(full_raw)} chars | Summary: {len(full_summary)} chars")
+        return full_raw, full_summary
 
     except Exception as e:
-        print(f"Summarize error: {e}")
-        return f"নোটিশ: {title}\n\n{ocr_text[:300]}"
+        print(f"Gemini OCR error: {e}")
+        return None, None
 
 
 # ==============================
-# STEP 4 — Database
+# STEP 3 — Database
 # ==============================
 def notice_exists(content_hash: str) -> bool:
     try:
@@ -228,7 +208,7 @@ def save_notice(title, raw_ocr, summary, source, content_hash):
 # ==============================
 def run_scraper():
     print("=" * 50)
-    print("DPI Notice Scraper Starting...")
+    print("DPI Notice Scraper Starting... (Gemini)")
     print("=" * 50)
 
     pdf_links = get_pdf_links()
@@ -247,25 +227,29 @@ def run_scraper():
 
         print(f"\n[{i+1}] {title[:60]}...")
 
-        # Step 2 — Mistral OCR
-        ocr_text = ocr_with_mistral(url)
-
-        if not ocr_text:
-            print("OCR failed, saving with link only...")
-            summary = f"নোটিশ: {title}\nবিস্তারিত দেখুন: {url}"
-        else:
-            # Step 3 — Summarize
-            summary = summarize_with_ai(title, ocr_text)
-
-        content_hash = sha256((ocr_text or title) + url)
-
-        if notice_exists(content_hash):
+        # Hash check before downloading (saves API calls)
+        quick_hash = sha256(title + url)
+        if notice_exists(quick_hash):
             print("Already exists, skipping...")
             continue
 
-        if save_notice(title, ocr_text, summary, url, content_hash):
+        # Gemini OCR + Summarize
+        raw_text, summary = ocr_and_summarize_with_gemini(title, url)
+
+        if not raw_text:
+            print("OCR failed, saving title + link only...")
+            raw_text = ""
+            summary = f"নোটিশ: {title}\nবিস্তারিত দেখুন: {url}"
+
+        content_hash = sha256((raw_text or title) + url)
+
+        if notice_exists(content_hash):
+            print("Already exists (content match), skipping...")
+            continue
+
+        if save_notice(title, raw_text, summary, url, content_hash):
             saved += 1
-            print("Saved!")
+            print(f"Saved! Summary: {summary[:80]}...")
         else:
             print("Failed to save!")
 
