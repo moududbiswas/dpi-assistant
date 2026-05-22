@@ -13,7 +13,7 @@ else:
     print("GEMINI_API_KEY loaded OK")
  
 genai.configure(api_key=GEMINI_API_KEY)
-GEMINI_MODEL = "gemini-2.0-flash"  # updated model
+GEMINI_MODEL = "gemini-2.0-flash-lite" # updated model
  
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
