@@ -18,7 +18,7 @@ else:
 genai.configure(api_key=GEMINI_API_KEY)
 
 # FIX 1: "gemini-3.1-flash-lite-preview" does NOT exist — was causing silent API failures
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")

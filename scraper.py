@@ -22,7 +22,6 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 TARGET_URL = "https://dhaka.polytech.gov.bd/pages/notices"
 MAX_CHARS = 5000
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
-
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
