@@ -227,6 +227,20 @@ def search_locations(q_raw, ctx):
             "center", "centre", "কেন্দ্র",
         ]
 
+        # FIX: Extract room numbers directly from query (e.g. "where is 113 room")
+        # Supabase has descriptions like "Room Number 113" — search by the number itself
+        room_numbers = re.findall(r'\b\d{2,4}\b', q_raw)
+        if room_numbers:
+            for rn in room_numbers:
+                result = supabase.table("locations").select(
+                    "name,description,floor,building"
+                ).or_(
+                    f"name.ilike.%{rn}%,description.ilike.%{rn}%"
+                ).limit(10).execute()
+                if result.data:
+                    print(f"Location: matched by room number '{rn}': {len(result.data)} rows", flush=True)
+                    return result.data
+
         # Check against original q_raw (Bengali .lower() is a no-op anyway)
         keywords = [term for term in location_terms if term in q_raw.lower()]
 
