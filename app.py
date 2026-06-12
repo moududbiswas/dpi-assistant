@@ -30,49 +30,59 @@ MAX_CONTEXT_CHARS = 10000
 # KEYWORD EXTRACTOR
 # FIX 1: Now receives original-case string so [A-Z] short_names regex works
 # ==============================
-def extract_context(q_original):
-    """Extract department, shift, semester, day, floor from question.
+def extract_context(q_original, history=None):
+    """Extract department, shift, semester, day, floor from question + history.
     Must receive the ORIGINAL (non-lowercased) string so short_names
-    regex r'\\b[A-Z]{2,5}\\b' can actually match uppercase abbreviations.
+    regex r'\b[A-Z]{2,5}\b' can actually match uppercase abbreviations.
+    history is scanned so multi-turn replies ("Electrical", "2nd") are caught.
     """
     q = q_original  # keep original for short_names regex
     ql = q_original.lower()  # use lowercased only for keyword matching
 
+    # Combine history messages so context from previous turns is visible
+    history = history or []
+    history_combined = " ".join(
+        m.get("content", "") for m in history[-6:]
+    ).lower()
+
+    # Values match exactly what is stored in Supabase (Bengali text)
     dept_map = {
-        "সিভিল": "civil", "civil": "civil",
-        "ইলেকট্রিক্যাল": "electrical", "ইলেক্ট্রিক্যাল": "electrical", "electrical": "electrical",
-        "কম্পিউটার": "computer", "computer": "computer",
-        "মেকানিক্যাল": "mechanical", "mechanical": "mechanical",
-        "আর্কিটেকচার": "architecture", "architecture": "architecture",
-        "ইলেকট্রনিক্স": "electronics", "electronics": "electronics",
-        "কেমিক্যাল": "chemical", "chemical": "chemical",
-        "টেক্সটাইল": "textile", "textile": "textile",
+        "সিভিল": "সিভিল", "civil": "সিভিল",
+        "ইলেকট্রিক্যাল": "ইলেকট্রিক্যাল", "ইলেক্ট্রিক্যাল": "ইলেকট্রিক্যাল", "electrical": "ইলেকট্রিক্যাল",
+        "কম্পিউটার": "কম্পিউটার", "computer": "কম্পিউটার",
+        "মেকানিক্যাল": "মেকানিক্যাল", "mechanical": "মেকানিক্যাল",
+        "আর্কিটেকচার": "আর্কিটেকচার", "architecture": "আর্কিটেকচার",
+        "ইলেকট্রনিক্স": "ইলেকট্রনিক্স", "electronics": "ইলেকট্রনিক্স",
+        "কেমিক্যাল": "কেমিক্যাল", "chemical": "কেমিক্যাল",
+        "টেক্সটাইল": "টেক্সটাইল", "textile": "টেক্সটাইল",
     }
 
     shift_map = {
-        "প্রথম": "1st", "1st": "1st", "first": "1st", "মর্নিং": "1st", "morning": "1st",
-        "দ্বিতীয়": "2nd", "2nd": "2nd", "second": "2nd", "ডে": "2nd", "day": "2nd",
+        "প্রথম": "১ম", "1st": "১ম", "first": "১ম", "মর্নিং": "১ম", "morning": "১ম",
+        "দ্বিতীয়": "২য়", "2nd": "২য়", "second": "২য়", "ডে": "২য়", "day": "২য়",
     }
 
     semester_map = {
-        "১ম": "1st", "১": "1st", "প্রথম সেমিস্টার": "1st",
-        "২য়": "2nd", "২": "2nd", "দ্বিতীয় সেমিস্টার": "2nd",
-        "৩য়": "3rd", "৩": "3rd", "তৃতীয় সেমিস্টার": "3rd",
-        "৪র্থ": "4th", "৪": "4th", "চতুর্থ সেমিস্টার": "4th",
-        "৫ম": "5th", "৫": "5th", "পঞ্চম সেমিস্টার": "5th",
-        "৬ষ্ঠ": "6th", "৬": "6th", "ষষ্ঠ সেমিস্টার": "6th",
-        "৭ম": "7th", "৭": "7th", "সপ্তম সেমিস্টার": "7th",
-        "৮ম": "8th", "৮": "8th", "অষ্টম সেমিস্টার": "8th",
+        "১ম": "১ম", "প্রথম সেমিস্টার": "১ম",
+        "২য়": "২য়", "দ্বিতীয় সেমিস্টার": "২য়",
+        "৩য়": "৩য়", "তৃতীয় সেমিস্টার": "৩য়",
+        "৪র্থ": "৪র্থ", "চতুর্থ সেমিস্টার": "৪র্থ",
+        "৫ম": "৫ম", "পঞ্চম সেমিস্টার": "৫ম",
+        "৬ষ্ঠ": "৬ষ্ঠ", "ষষ্ঠ সেমিস্টার": "৬ষ্ঠ",
+        "৭ম": "৭ম", "সপ্তম সেমিস্টার": "৭ম",
+        "৮ম": "৮ম", "অষ্টম সেমিস্টার": "৮ম",
+        "1st": "১ম", "2nd": "২য়", "3rd": "৩য়", "4th": "৪র্থ",
+        "5th": "৫ম", "6th": "৬ষ্ঠ", "7th": "৭ম", "8th": "৮ম",
     }
 
     day_map = {
-        "রবিবার": "sunday", "sunday": "sunday",
-        "সোমবার": "monday", "monday": "monday",
-        "মঙ্গলবার": "tuesday", "tuesday": "tuesday",
-        "বুধবার": "wednesday", "wednesday": "wednesday",
-        "বৃহস্পতিবার": "thursday", "thursday": "thursday",
-        "শুক্রবার": "friday", "friday": "friday",
-        "শনিবার": "saturday", "saturday": "saturday",
+        "রবিবার": "রবিবার", "sunday": "রবিবার",
+        "সোমবার": "সোমবার", "monday": "সোমবার",
+        "মঙ্গলবার": "মঙ্গলবার", "tuesday": "মঙ্গলবার",
+        "বুধবার": "বুধবার", "wednesday": "বুধবার",
+        "বৃহস্পতিবার": "বৃহস্পতিবার", "thursday": "বৃহস্পতিবার",
+        "শুক্রবার": "শুক্রবার", "friday": "শুক্রবার",
+        "শনিবার": "শনিবার", "saturday": "শনিবার",
     }
 
     floor_map = {
@@ -82,32 +92,40 @@ def extract_context(q_original):
         "1st floor": "1st", "2nd floor": "2nd", "3rd floor": "3rd",
     }
 
+    # Extract single-letter group (A/B/C/D) from original string
+    group_match = re.findall(r'\b([A-D])\b', q)
+
     ctx = {
         "department": None, "shift": None, "semester": None,
         "day": None, "floor": None,
+        "group": group_match[0] if group_match else None,
         # FIX 1: run regex on original string, not lowercased
         "short_names": re.findall(r'\b[A-Z]{2,5}\b', q),
     }
 
-    # Use ql (lowercased) for all keyword matching
+    # Scan current message first, fall back to history if not found.
+    # This handles multi-turn: "routine" → "Electrical" → "2nd" → "5th,c"
+    # Each follow-up reply alone has no dept/shift, but history does.
+    all_text = ql + " " + history_combined
+
     for k, v in dept_map.items():
-        if k in ql:
+        if k in all_text:
             ctx["department"] = v
             break
     for k, v in shift_map.items():
-        if k in ql:
+        if k in all_text:
             ctx["shift"] = v
             break
     for k, v in semester_map.items():
-        if k in ql:
+        if k in all_text:
             ctx["semester"] = v
             break
     for k, v in day_map.items():
-        if k in ql:
+        if k in all_text:
             ctx["day"] = v
             break
     for k, v in floor_map.items():
-        if k in ql:
+        if k in all_text:
             ctx["floor"] = v
             break
 
@@ -177,7 +195,7 @@ def search_routines(q_raw, ctx):
 
         has_any_filter = any([
             ctx["department"], ctx["shift"], ctx["semester"],
-            ctx["day"], ctx["short_names"]
+            ctx["day"], ctx["short_names"], ctx.get("group")
         ])
 
         # FIX 2: If no filters at all, return empty so Gemini asks the user
@@ -194,6 +212,9 @@ def search_routines(q_raw, ctx):
             query = query.ilike("semester", f"%{ctx['semester']}%")
         if ctx["day"]:
             query = query.ilike("day", f"%{ctx['day']}%")
+
+        if ctx.get("group"):
+            query = query.ilike("group_name", f"%{ctx['group']}%")
 
         if ctx["short_names"]:
             for sn in ctx["short_names"]:
@@ -331,16 +352,26 @@ def search_qa(q_raw):
 # FIX 1 applied here: extract_context now receives user_question (original case)
 # FIX 4: Expanded routine trigger keywords
 # ==============================
-def get_relevant_data(user_question):
+def get_relevant_data(user_question, history=None):
     # FIX 1: pass original string — extract_context needs it for [A-Z] regex
-    ctx = extract_context(user_question)
+    ctx = extract_context(user_question, history)
     q = user_question.lower()  # lowercased only for trigger keyword matching
     data = ""
 
+    # Build a combined text from recent history to detect ongoing intent.
+    # When user replies "Electrical" or "2nd" as follow-up, the original
+    # intent (routine/location) only exists in previous messages.
+    history = history or []
+    history_text = " ".join(
+        m.get("content", "") for m in history[-6:]
+    ).lower()
+    # Merge current message + history for trigger detection only
+    q_with_history = q + " " + history_text
+
     try:
         # --- ROUTINE ---
-        # FIX 4: expanded trigger list with common phrasings students use
-        if any(w in q for w in [
+        # FIX 4: check current message AND history for routine intent
+        if any(w in q_with_history for w in [
             "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
             "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
             "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroo"
@@ -357,7 +388,7 @@ def get_relevant_data(user_question):
                     )
 
         # --- TEACHER ---
-        if any(w in q for w in [
+        if any(w in q_with_history for w in [
             "শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
             "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
@@ -377,7 +408,7 @@ def get_relevant_data(user_question):
                     )
 
         # --- NOTICE ---
-        if any(w in q for w in [
+        if any(w in q_with_history for w in [
             "নোটিশ", "বিজ্ঞপ্তি", "notice", "circular", "ঘোষণা", "সর্বশেষ", "নতুন"
         ]):
             rows = supabase.table("notices").select(
@@ -390,7 +421,7 @@ def get_relevant_data(user_question):
                     data += f"• {n['title']} ({n['date']}): {content}\n"
 
         # --- LOCATION ---
-        if any(w in q for w in [
+        if any(w in q_with_history for w in [
             "কোথায়", "রুম", "ওয়াশরুম", "টয়লেট", "ক্যান্টিন",
             "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor",
             "lab", "laboratory", "center", "centre", "wiring",
@@ -433,8 +464,8 @@ def get_relevant_data(user_question):
 # ==============================
 # SYSTEM PROMPT
 # ==============================
-def build_system_prompt(user_question=""):
-    relevant_data = get_relevant_data(user_question)
+def build_system_prompt(user_question="", history=None):
+    relevant_data = get_relevant_data(user_question, history or [])
     return f"""তুমি ঢাকা পলিটেকনিক ইনস্টিটিউটের AI সহকারী, নাম DPI Assistant। সবসময় বাংলায় উত্তর দাও।
 কাউকে স্বাগত জানানোর সময় বা প্রথম বার্তায় সালাম দাও: "আসসালামু আলাইকুম" — কখনো "নমস্কার" বলবে না।
 
@@ -522,7 +553,7 @@ def ask():
 
         print(f"User input: {user_input[:80]}", flush=True)
 
-        system_prompt = build_system_prompt(user_input)
+        system_prompt = build_system_prompt(user_input, history)
         reply, error = get_response(system_prompt, history, user_input)
 
         if error:
