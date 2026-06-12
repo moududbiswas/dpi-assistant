@@ -17,21 +17,26 @@ else:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# FIX 1: "gemini-3.1-flash-lite-preview" does NOT exist — was causing silent API failures
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-MAX_CONTEXT_CHARS = 10000  # Prevent context overflow to Gemini
+MAX_CONTEXT_CHARS = 10000
 
 
 # ==============================
 # KEYWORD EXTRACTOR
+# FIX 1: Now receives original-case string so [A-Z] short_names regex works
 # ==============================
-def extract_context(q):
-    """Extract department, shift, semester, day, floor from question"""
+def extract_context(q_original):
+    """Extract department, shift, semester, day, floor from question.
+    Must receive the ORIGINAL (non-lowercased) string so short_names
+    regex r'\\b[A-Z]{2,5}\\b' can actually match uppercase abbreviations.
+    """
+    q = q_original  # keep original for short_names regex
+    ql = q_original.lower()  # use lowercased only for keyword matching
 
     dept_map = {
         "সিভিল": "civil", "civil": "civil",
@@ -80,27 +85,29 @@ def extract_context(q):
     ctx = {
         "department": None, "shift": None, "semester": None,
         "day": None, "floor": None,
+        # FIX 1: run regex on original string, not lowercased
         "short_names": re.findall(r'\b[A-Z]{2,5}\b', q),
     }
 
+    # Use ql (lowercased) for all keyword matching
     for k, v in dept_map.items():
-        if k in q:
+        if k in ql:
             ctx["department"] = v
             break
     for k, v in shift_map.items():
-        if k in q:
+        if k in ql:
             ctx["shift"] = v
             break
     for k, v in semester_map.items():
-        if k in q:
+        if k in ql:
             ctx["semester"] = v
             break
     for k, v in day_map.items():
-        if k in q:
+        if k in ql:
             ctx["day"] = v
             break
     for k, v in floor_map.items():
-        if k in q:
+        if k in ql:
             ctx["floor"] = v
             break
 
@@ -160,12 +167,24 @@ def search_teachers(q_raw, ctx):
 
 # ==============================
 # DYNAMIC ROUTINE SEARCH
+# FIX 2: Guard against unfiltered 100-row fallback flooding context
 # ==============================
 def search_routines(q_raw, ctx):
     try:
         query = supabase.table("routines").select(
             "department,shift,semester,group_name,day,period,start_time,end_time,subject,teacher_short,room"
         )
+
+        has_any_filter = any([
+            ctx["department"], ctx["shift"], ctx["semester"],
+            ctx["day"], ctx["short_names"]
+        ])
+
+        # FIX 2: If no filters at all, return empty so Gemini asks the user
+        # to clarify (dept → shift → semester) as instructed in system prompt
+        if not has_any_filter:
+            print("Routine: no filters detected, returning [] to let Gemini ask", flush=True)
+            return []
 
         if ctx["department"]:
             query = query.ilike("department", f"%{ctx['department']}%")
@@ -182,7 +201,8 @@ def search_routines(q_raw, ctx):
                 if r.data:
                     return r.data
 
-        result = query.limit(100).execute()
+        # FIX 2: Cap at 30 rows max (was 100) to protect context budget
+        result = query.limit(30).execute()
         return result.data or []
 
     except Exception as e:
@@ -192,6 +212,7 @@ def search_routines(q_raw, ctx):
 
 # ==============================
 # DYNAMIC LOCATION SEARCH
+# FIX 3: Remove blind 50-row fallback that floods Gemini's context
 # ==============================
 def search_locations(q_raw, ctx):
     try:
@@ -206,6 +227,7 @@ def search_locations(q_raw, ctx):
             "center", "centre", "কেন্দ্র",
         ]
 
+        # Check against original q_raw (Bengali .lower() is a no-op anyway)
         keywords = [term for term in location_terms if term in q_raw.lower()]
 
         if keywords:
@@ -228,11 +250,10 @@ def search_locations(q_raw, ctx):
             if result.data:
                 return result.data
 
-        # Fallback: all locations (capped)
-        result = supabase.table("locations").select(
-            "name,description,floor,building"
-        ).limit(50).execute()
-        return result.data or []
+        # FIX 3: No keyword and no floor filter → return empty instead of
+        # dumping 50 unrelated rows that confuse Gemini
+        print("Location: no keyword/floor match, returning [] to avoid context flood", flush=True)
+        return []
 
     except Exception as e:
         print(f"Location search error: {e}", flush=True)
@@ -240,16 +261,10 @@ def search_locations(q_raw, ctx):
 
 
 # ==============================
-# DYNAMIC QA SEARCH — FIXED
+# DYNAMIC QA SEARCH
 # ==============================
 def search_qa(q_raw):
-    """
-    FIX 2: Old code only did ilike on first 50 chars → almost always missed.
-    FIX 3: Old code included NULL answers, confusing Gemini.
-    Now: multi-keyword search + NULL answer filter.
-    """
     try:
-        # Step 1: Try matching a meaningful chunk of the question
         result = supabase.table("qa").select("question,answer") \
             .ilike("question", f"%{q_raw[:60]}%") \
             .not_.is_("answer", "null") \
@@ -259,7 +274,6 @@ def search_qa(q_raw):
             print(f"QA matched by chunk: {len(result.data)} rows", flush=True)
             return result.data
 
-        # Step 2: Extract meaningful keywords (3+ char words, skip stopwords)
         bangla_stopwords = {"কি", "কে", "কোন", "কখন", "কত", "কার", "এর", "এই",
                             "আছে", "আছেন", "হয়", "কোথায়", "দেন", "দাও", "বলো"}
         words = [
@@ -270,7 +284,7 @@ def search_qa(q_raw):
         seen = set()
         matches = []
 
-        for word in words[:8]:  # Check top 8 keywords
+        for word in words[:8]:
             r = supabase.table("qa").select("question,answer") \
                 .ilike("question", f"%{word}%") \
                 .not_.is_("answer", "null") \
@@ -286,7 +300,6 @@ def search_qa(q_raw):
             print(f"QA matched by keywords: {len(matches)} rows", flush=True)
             return matches[:20]
 
-        # Step 3: Fallback — return all QA that have answers (NOT NULL)
         result = supabase.table("qa").select("question,answer") \
             .not_.is_("answer", "null") \
             .limit(100).execute()
@@ -301,17 +314,22 @@ def search_qa(q_raw):
 
 # ==============================
 # SMART DATA FETCHING (RAG)
+# FIX 1 applied here: extract_context now receives user_question (original case)
+# FIX 4: Expanded routine trigger keywords
 # ==============================
 def get_relevant_data(user_question):
-    q = user_question.lower()
-    ctx = extract_context(q)
+    # FIX 1: pass original string — extract_context needs it for [A-Z] regex
+    ctx = extract_context(user_question)
+    q = user_question.lower()  # lowercased only for trigger keyword matching
     data = ""
 
     try:
         # --- ROUTINE ---
+        # FIX 4: expanded trigger list with common phrasings students use
         if any(w in q for w in [
             "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
-            "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject"
+            "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
+            "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroo"
         ]):
             rows = search_routines(user_question, ctx)
             if rows:
@@ -374,13 +392,13 @@ def get_relevant_data(user_question):
                         f"তলা: {l['floor']} | বিল্ডিং: {l['building']}\n"
                     )
 
-        # --- Q&A (always run, smarter search + NULL filtered) ---
+        # --- Q&A ---
         qa_rows = search_qa(user_question)
         if qa_rows:
             data += "\n=== প্রশ্নোত্তর ===\n"
             for item in qa_rows:
                 answer = item.get("answer") or ""
-                if answer.strip():  # Double-check: skip empty/null answers
+                if answer.strip():
                     data += f"প্রশ্ন: {item['question']}\nউত্তর: {answer}\n\n"
 
         # --- Context size guard ---
