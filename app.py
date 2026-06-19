@@ -27,8 +27,34 @@ MAX_CONTEXT_CHARS = 10000
 
 
 # ==============================
+# FIX 5: Position-based keyword matcher
+# Old behavior: looped over a dict and broke on the first key found in
+# DICT DEFINITION ORDER, not the order the keyword actually appears in
+# the user's sentence. This caused wrong department/shift/semester/day/
+# floor picks whenever a question mentioned more than one candidate
+# (e.g. "মেকানিক্যাল না, ইলেকট্রিক্যাল বিভাগের রুটিন চাই").
+# New behavior: scan ALL keys, find the one whose match starts at the
+# LOWEST index in the text, and use that. Since `all_text` is built as
+# (current message + history), the current message's keywords are
+# checked first, naturally prioritizing the latest user intent over
+# older history mentions.
+# ==============================
+def _find_earliest_match(mapping, text):
+    best_value = None
+    best_idx = None
+    for key, value in mapping.items():
+        idx = text.find(key)
+        if idx != -1 and (best_idx is None or idx < best_idx):
+            best_idx = idx
+            best_value = value
+    return best_value
+
+
+# ==============================
 # KEYWORD EXTRACTOR
 # FIX 1: Now receives original-case string so [A-Z] short_names regex works
+# FIX 5: department/shift/semester/day/floor now picked by earliest
+#        position in text instead of dict iteration order (see above)
 # ==============================
 def extract_context(q_original, history=None):
     """Extract department, shift, semester, day, floor from question + history.
@@ -108,26 +134,13 @@ def extract_context(q_original, history=None):
     # Each follow-up reply alone has no dept/shift, but history does.
     all_text = ql + " " + history_combined
 
-    for k, v in dept_map.items():
-        if k in all_text:
-            ctx["department"] = v
-            break
-    for k, v in shift_map.items():
-        if k in all_text:
-            ctx["shift"] = v
-            break
-    for k, v in semester_map.items():
-        if k in all_text:
-            ctx["semester"] = v
-            break
-    for k, v in day_map.items():
-        if k in all_text:
-            ctx["day"] = v
-            break
-    for k, v in floor_map.items():
-        if k in all_text:
-            ctx["floor"] = v
-            break
+    # FIX 5: replaced dict-order "first match wins" loops with
+    # position-based earliest-match lookup (see _find_earliest_match above)
+    ctx["department"] = _find_earliest_match(dept_map, all_text)
+    ctx["shift"] = _find_earliest_match(shift_map, all_text)
+    ctx["semester"] = _find_earliest_match(semester_map, all_text)
+    ctx["day"] = _find_earliest_match(day_map, all_text)
+    ctx["floor"] = _find_earliest_match(floor_map, all_text)
 
     return ctx
 
