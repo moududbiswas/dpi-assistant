@@ -28,16 +28,6 @@ MAX_CONTEXT_CHARS = 10000
 
 # ==============================
 # FIX 5: Position-based keyword matcher
-# Old behavior: looped over a dict and broke on the first key found in
-# DICT DEFINITION ORDER, not the order the keyword actually appears in
-# the user's sentence. This caused wrong department/shift/semester/day/
-# floor picks whenever a question mentioned more than one candidate
-# (e.g. "মেকানিক্যাল না, ইলেকট্রিক্যাল বিভাগের রুটিন চাই").
-# New behavior: scan ALL keys, find the one whose match starts at the
-# LOWEST index in the text, and use that. Since `all_text` is built as
-# (current message + history), the current message's keywords are
-# checked first, naturally prioritizing the latest user intent over
-# older history mentions.
 # ==============================
 def _find_earliest_match(mapping, text):
     best_value = None
@@ -52,26 +42,40 @@ def _find_earliest_match(mapping, text):
 
 # ==============================
 # KEYWORD EXTRACTOR
-# FIX 1: Now receives original-case string so [A-Z] short_names regex works
-# FIX 5: department/shift/semester/day/floor now picked by earliest
-#        position in text instead of dict iteration order (see above)
+# KEY FIX: shift_map and semester_map no longer share "1st"/"2nd" keys.
+#
+# ROOT CAUSE OF THE BUG:
+#   "1st" existed in BOTH shift_map AND semester_map.
+#   "2nd" existed in BOTH shift_map AND semester_map.
+#   When a user typed "architecture 1st shift 2nd semester B",
+#   _find_earliest_match on semester_map found "1st" (index 13) BEFORE "2nd"
+#   (index 23), so semester was incorrectly set to "১ম" (1st) instead of "২য়"
+#   (2nd). The Supabase query then found no rows for 1st semester, returning
+#   empty → Gemini replied "তথ্য নেই।"
+#
+# THE FIX:
+#   shift_map  → owns only Bengali ordinals (প্রথম/দ্বিতীয়) + morning/day words.
+#                "1st" and "2nd" REMOVED from shift_map.
+#   semester_map → keeps all English ordinals "1st"–"8th".
+#   This way "1st shift 2nd semester" correctly resolves:
+#     shift    = প্রথম → "১ম"   (matched via "প্রথম" in Bengali context,
+#                                or via position of "morning"/"মর্নিং")
+#     semester = "2nd" → "২য়"  (unambiguous, only in semester_map now)
+#
+# ADDITIONAL FIX: context-aware shift detection.
+#   When user writes "1st shift", we detect "shift" keyword and then look
+#   for the nearest ordinal before it to determine shift value.
 # ==============================
 def extract_context(q_original, history=None):
-    """Extract department, shift, semester, day, floor from question + history.
-    Must receive the ORIGINAL (non-lowercased) string so short_names
-    regex r'\b[A-Z]{2,5}\b' can actually match uppercase abbreviations.
-    history is scanned so multi-turn replies ("Electrical", "2nd") are caught.
-    """
-    q = q_original  # keep original for short_names regex
-    ql = q_original.lower()  # use lowercased only for keyword matching
+    """Extract department, shift, semester, day, floor from question + history."""
+    q = q_original          # keep original for short_names regex
+    ql = q_original.lower() # lowercased for keyword matching
 
-    # Combine history messages so context from previous turns is visible
     history = history or []
     history_combined = " ".join(
         m.get("content", "") for m in history[-6:]
     ).lower()
 
-    # Values match exactly what is stored in Supabase (Bengali text)
     dept_map = {
         "সিভিল": "সিভিল", "civil": "সিভিল",
         "ইলেকট্রিক্যাল": "ইলেকট্রিক্যাল", "ইলেক্ট্রিক্যাল": "ইলেকট্রিক্যাল", "electrical": "ইলেকট্রিক্যাল",
@@ -83,20 +87,32 @@ def extract_context(q_original, history=None):
         "টেক্সটাইল": "টেক্সটাইল", "textile": "টেক্সটাইল",
     }
 
+    # FIX: Removed "1st" and "2nd" from shift_map — they collided with
+    # semester_map causing _find_earliest_match to pick the wrong value.
+    # Shift is now detected via Bengali words, morning/day keywords,
+    # or the context-aware "Nth shift" parser below.
     shift_map = {
-        "প্রথম": "১ম", "1st": "১ম", "first": "১ম", "মর্নিং": "১ম", "morning": "১ম",
-        "দ্বিতীয়": "২য়", "2nd": "২য়", "second": "২য়", "ডে": "২য়", "day": "২য়",
+        "প্রথম শিফট": "১ম", "১ম শিফট": "১ম",
+        "প্রথম": "১ম", "মর্নিং": "১ম", "morning": "১ম",
+        "দ্বিতীয় শিফট": "২য়", "২য় শিফট": "২য়",
+        "দ্বিতীয়": "২য়", "ডে": "২য়", "day shift": "২য়",
     }
 
+    # FIX: "1st" kept ONLY here (removed from shift_map).
+    # "2nd" kept ONLY here (removed from shift_map).
     semester_map = {
-        "১ম": "১ম", "প্রথম সেমিস্টার": "১ম",
-        "২য়": "২য়", "দ্বিতীয় সেমিস্টার": "২য়",
-        "৩য়": "৩য়", "তৃতীয় সেমিস্টার": "৩য়",
-        "৪র্থ": "৪র্থ", "চতুর্থ সেমিস্টার": "৪র্থ",
-        "৫ম": "৫ম", "পঞ্চম সেমিস্টার": "৫ম",
-        "৬ষ্ঠ": "৬ষ্ঠ", "ষষ্ঠ সেমিস্টার": "৬ষ্ঠ",
-        "৭ম": "৭ম", "সপ্তম সেমিস্টার": "৭ম",
-        "৮ম": "৮ম", "অষ্টম সেমিস্টার": "৮ম",
+        "১ম সেমিস্টার": "১ম", "প্রথম সেমিস্টার": "১ম",
+        "২য় সেমিস্টার": "২য়", "দ্বিতীয় সেমিস্টার": "২য়",
+        "৩য় সেমিস্টার": "৩য়", "তৃতীয় সেমিস্টার": "৩য়",
+        "৪র্থ সেমিস্টার": "৪র্থ", "চতুর্থ সেমিস্টার": "৪র্থ",
+        "৫ম সেমিস্টার": "৫ম", "পঞ্চম সেমিস্টার": "৫ম",
+        "৬ষ্ঠ সেমিস্টার": "৬ষ্ঠ", "ষষ্ঠ সেমিস্টার": "৬ষ্ঠ",
+        "৭ম সেমিস্টার": "৭ম", "সপ্তম সেমিস্টার": "৭ম",
+        "৮ম সেমিস্টার": "৮ম", "অষ্টম সেমিস্টার": "৮ম",
+        # Standalone Bengali numerals (lower priority — listed after phrases)
+        "১ম": "১ম", "২য়": "২য়", "৩য়": "৩য়", "৪র্থ": "৪র্থ",
+        "৫ম": "৫ম", "৬ষ্ঠ": "৬ষ্ঠ", "৭ম": "৭ম", "৮ম": "৮ম",
+        # English ordinals — ONLY in semester_map now
         "1st": "১ম", "2nd": "২য়", "3rd": "৩য়", "4th": "৪র্থ",
         "5th": "৫ম", "6th": "৬ষ্ঠ", "7th": "৭ম", "8th": "৮ম",
     }
@@ -118,29 +134,103 @@ def extract_context(q_original, history=None):
         "1st floor": "1st", "2nd floor": "2nd", "3rd floor": "3rd",
     }
 
-    # Extract single-letter group (A/B/C/D) from original string
     group_match = re.findall(r'\b([A-D])\b', q)
 
     ctx = {
         "department": None, "shift": None, "semester": None,
         "day": None, "floor": None,
         "group": group_match[0] if group_match else None,
-        # FIX 1: run regex on original string, not lowercased
         "short_names": re.findall(r'\b[A-Z]{2,5}\b', q),
     }
 
-    # Scan current message first, fall back to history if not found.
-    # This handles multi-turn: "routine" → "Electrical" → "2nd" → "5th,c"
-    # Each follow-up reply alone has no dept/shift, but history does.
     all_text = ql + " " + history_combined
 
-    # FIX 5: replaced dict-order "first match wins" loops with
-    # position-based earliest-match lookup (see _find_earliest_match above)
     ctx["department"] = _find_earliest_match(dept_map, all_text)
-    ctx["shift"] = _find_earliest_match(shift_map, all_text)
-    ctx["semester"] = _find_earliest_match(semester_map, all_text)
-    ctx["day"] = _find_earliest_match(day_map, all_text)
-    ctx["floor"] = _find_earliest_match(floor_map, all_text)
+    ctx["day"]        = _find_earliest_match(day_map, all_text)
+    ctx["floor"]      = _find_earliest_match(floor_map, all_text)
+
+    # ----------------------------------------------------------------
+    # CONTEXT-AWARE shift detection:
+    # Look for patterns like "1st shift", "2nd shift", "first shift",
+    # "morning shift" etc. before falling back to shift_map.
+    # This correctly handles "1st shift 2nd semester" by anchoring the
+    # ordinal to the word "shift" rather than letting it float freely.
+    # ----------------------------------------------------------------
+    shift_pattern = re.search(
+        r'(১ম|প্রথম|first|1st|morning|মর্নিং)\s*(শিফট|shift)?|'
+        r'(২য়|দ্বিতীয়|second|2nd|day|ডে)\s*(শিফট|shift)',
+        all_text
+    )
+    if shift_pattern:
+        matched = shift_pattern.group(0).lower()
+        if any(k in matched for k in ["১ম", "প্রথম", "first", "1st", "morning", "মর্নিং"]):
+            ctx["shift"] = "১ম"
+        else:
+            ctx["shift"] = "২য়"
+    else:
+        ctx["shift"] = _find_earliest_match(shift_map, all_text)
+
+    # ----------------------------------------------------------------
+    # CONTEXT-AWARE semester detection:
+    # After shift is resolved, find the semester ordinal that is NOT
+    # the one already consumed by shift detection.
+    # Strategy: find ALL ordinal matches in the text, then pick the one
+    # closest to the word "semester/সেমিস্টার" if present, otherwise
+    # pick the one that doesn't match the shift value.
+    # ----------------------------------------------------------------
+    semester_from_map = _find_earliest_match(semester_map, all_text)
+
+    # If the semester_map picked the same ordinal as shift (e.g. both
+    # matched "1st"), we need to find the NEXT ordinal in the text.
+    if semester_from_map and ctx["shift"]:
+        shift_en_map = {"১ম": "1st", "২য়": "2nd"}
+        shift_en = shift_en_map.get(ctx["shift"], "")
+
+        # Find the position of the shift-related ordinal
+        shift_ordinals = {
+            "১ম": ["১ম", "প্রথম", "1st", "first", "morning", "মর্নিং"],
+            "২য়": ["২য়", "দ্বিতীয়", "2nd", "second", "day", "ডে"],
+        }
+        shift_keywords = shift_ordinals.get(ctx["shift"], [])
+
+        # Check if semester_from_map was actually the shift ordinal appearing first
+        # by seeing if the earliest semester key is also a shift keyword
+        earliest_sem_key = None
+        earliest_sem_idx = None
+        for key, val in semester_map.items():
+            idx = all_text.find(key)
+            if idx != -1 and (earliest_sem_idx is None or idx < earliest_sem_idx):
+                earliest_sem_idx = idx
+                earliest_sem_key = key
+
+        if earliest_sem_key and earliest_sem_key in shift_keywords:
+            # The semester map's earliest match is actually the shift word.
+            # Find the SECOND ordinal — search for semester keyword proximity.
+            sem_keyword_idx = all_text.find("semester")
+            if sem_keyword_idx == -1:
+                sem_keyword_idx = all_text.find("সেমিস্টার")
+
+            best_key = None
+            best_dist = None
+            for key, val in semester_map.items():
+                if key in shift_keywords:
+                    continue  # skip the shift ordinal
+                idx = all_text.find(key)
+                if idx == -1:
+                    continue
+                if sem_keyword_idx != -1:
+                    dist = abs(idx - sem_keyword_idx)
+                    if best_dist is None or dist < best_dist:
+                        best_dist = dist
+                        best_key = key
+                        semester_from_map = val
+                else:
+                    # No "semester" word in text — just pick the next ordinal
+                    if best_key is None:
+                        best_key = key
+                        semester_from_map = val
+
+    ctx["semester"] = semester_from_map
 
     return ctx
 
@@ -181,7 +271,6 @@ def search_teachers(q_raw, ctx):
             else:
                 results = query.limit(60).execute().data or []
 
-        # Deduplicate
         seen = set()
         unique = []
         for t in results:
@@ -198,7 +287,6 @@ def search_teachers(q_raw, ctx):
 
 # ==============================
 # DYNAMIC ROUTINE SEARCH
-# FIX 2: Guard against unfiltered 100-row fallback flooding context
 # ==============================
 def search_routines(q_raw, ctx):
     try:
@@ -211,8 +299,6 @@ def search_routines(q_raw, ctx):
             ctx["day"], ctx["short_names"], ctx.get("group")
         ])
 
-        # FIX 2: If no filters at all, return empty so Gemini asks the user
-        # to clarify (dept → shift → semester) as instructed in system prompt
         if not has_any_filter:
             print("Routine: no filters detected, returning [] to let Gemini ask", flush=True)
             return []
@@ -235,7 +321,6 @@ def search_routines(q_raw, ctx):
                 if r.data:
                     return r.data
 
-        # FIX 2: Cap at 30 rows max (was 100) to protect context budget
         result = query.limit(30).execute()
         return result.data or []
 
@@ -246,7 +331,6 @@ def search_routines(q_raw, ctx):
 
 # ==============================
 # DYNAMIC LOCATION SEARCH
-# FIX 3: Remove blind 50-row fallback that floods Gemini's context
 # ==============================
 def search_locations(q_raw, ctx):
     try:
@@ -261,8 +345,6 @@ def search_locations(q_raw, ctx):
             "center", "centre", "কেন্দ্র",
         ]
 
-        # FIX: Extract room numbers directly from query (e.g. "where is 113 room")
-        # Supabase has descriptions like "Room Number 113" — search by the number itself
         room_numbers = re.findall(r'\b\d{2,4}\b', q_raw)
         if room_numbers:
             for rn in room_numbers:
@@ -275,7 +357,6 @@ def search_locations(q_raw, ctx):
                     print(f"Location: matched by room number '{rn}': {len(result.data)} rows", flush=True)
                     return result.data
 
-        # Check against original q_raw (Bengali .lower() is a no-op anyway)
         keywords = [term for term in location_terms if term in q_raw.lower()]
 
         if keywords:
@@ -298,8 +379,6 @@ def search_locations(q_raw, ctx):
             if result.data:
                 return result.data
 
-        # FIX 3: No keyword and no floor filter → return empty instead of
-        # dumping 50 unrelated rows that confuse Gemini
         print("Location: no keyword/floor match, returning [] to avoid context flood", flush=True)
         return []
 
@@ -362,28 +441,24 @@ def search_qa(q_raw):
 
 # ==============================
 # SMART DATA FETCHING (RAG)
-# FIX 1 applied here: extract_context now receives user_question (original case)
-# FIX 4: Expanded routine trigger keywords
 # ==============================
 def get_relevant_data(user_question, history=None):
-    # FIX 1: pass original string — extract_context needs it for [A-Z] regex
     ctx = extract_context(user_question, history)
-    q = user_question.lower()  # lowercased only for trigger keyword matching
+    q = user_question.lower()
     data = ""
 
-    # Build a combined text from recent history to detect ongoing intent.
-    # When user replies "Electrical" or "2nd" as follow-up, the original
-    # intent (routine/location) only exists in previous messages.
+    # Debug log so you can verify ctx values in production
+    print(f"CTX → dept={ctx['department']} shift={ctx['shift']} "
+          f"sem={ctx['semester']} group={ctx['group']} day={ctx['day']}", flush=True)
+
     history = history or []
     history_text = " ".join(
         m.get("content", "") for m in history[-6:]
     ).lower()
-    # Merge current message + history for trigger detection only
     q_with_history = q + " " + history_text
 
     try:
         # --- ROUTINE ---
-        # FIX 4: check current message AND history for routine intent
         if any(w in q_with_history for w in [
             "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
             "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
