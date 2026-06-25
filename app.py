@@ -8,9 +8,9 @@ from supabase import create_client
 
 app = Flask(__name__)
 
-# ==============================
+
 # CONFIG
-# ==============================
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("ERROR: GEMINI_API_KEY is not set!", flush=True)
@@ -25,12 +25,10 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-MAX_CONTEXT_CHARS = 10000
+MAX_CONTEXT_CHARS = 20000
 
 
-# ==============================
-# FIX 5: Position-based keyword matcher
-# ==============================
+
 def _find_earliest_match(mapping, text):
     best_value = None
     best_idx = None
@@ -42,32 +40,7 @@ def _find_earliest_match(mapping, text):
     return best_value
 
 
-# ==============================
-# KEYWORD EXTRACTOR
-# KEY FIX: shift_map and semester_map no longer share "1st"/"2nd" keys.
-#
-# ROOT CAUSE OF THE BUG:
-#   "1st" existed in BOTH shift_map AND semester_map.
-#   "2nd" existed in BOTH shift_map AND semester_map.
-#   When a user typed "architecture 1st shift 2nd semester B",
-#   _find_earliest_match on semester_map found "1st" (index 13) BEFORE "2nd"
-#   (index 23), so semester was incorrectly set to "১ম" (1st) instead of "২য়"
-#   (2nd). The Supabase query then found no rows for 1st semester, returning
-#   empty → Gemini replied "তথ্য নেই।"
-#
-# THE FIX:
-#   shift_map  → owns only Bengali ordinals (প্রথম/দ্বিতীয়) + morning/day words.
-#                "1st" and "2nd" REMOVED from shift_map.
-#   semester_map → keeps all English ordinals "1st"–"8th".
-#   This way "1st shift 2nd semester" correctly resolves:
-#     shift    = প্রথম → "১ম"   (matched via "প্রথম" in Bengali context,
-#                                or via position of "morning"/"মর্নিং")
-#     semester = "2nd" → "২য়"  (unambiguous, only in semester_map now)
-#
-# ADDITIONAL FIX: context-aware shift detection.
-#   When user writes "1st shift", we detect "shift" keyword and then look
-#   for the nearest ordinal before it to determine shift value.
-# ==============================
+
 def extract_context(q_original, history=None):
     """Extract department, shift, semester, day, floor from question + history."""
     q = q_original          # keep original for short_names regex
@@ -89,10 +62,7 @@ def extract_context(q_original, history=None):
         "টেক্সটাইল": "টেক্সটাইল", "textile": "টেক্সটাইল",
     }
 
-    # FIX: Removed "1st" and "2nd" from shift_map — they collided with
-    # semester_map causing _find_earliest_match to pick the wrong value.
-    # Shift is now detected via Bengali words, morning/day keywords,
-    # or the context-aware "Nth shift" parser below.
+
     shift_map = {
         "প্রথম শিফট": "১ম", "১ম শিফট": "১ম",
         "প্রথম": "১ম", "মর্নিং": "১ম", "morning": "১ম",
@@ -100,8 +70,7 @@ def extract_context(q_original, history=None):
         "দ্বিতীয়": "২য়", "ডে": "২য়", "day shift": "২য়",
     }
 
-    # FIX: "1st" kept ONLY here (removed from shift_map).
-    # "2nd" kept ONLY here (removed from shift_map).
+   
     semester_map = {
         "১ম সেমিস্টার": "১ম", "প্রথম সেমিস্টার": "১ম",
         "২য় সেমিস্টার": "২য়", "দ্বিতীয় সেমিস্টার": "২য়",
@@ -111,10 +80,8 @@ def extract_context(q_original, history=None):
         "৬ষ্ঠ সেমিস্টার": "৬ষ্ঠ", "ষষ্ঠ সেমিস্টার": "৬ষ্ঠ",
         "৭ম সেমিস্টার": "৭ম", "সপ্তম সেমিস্টার": "৭ম",
         "৮ম সেমিস্টার": "৮ম", "অষ্টম সেমিস্টার": "৮ম",
-        # Standalone Bengali numerals (lower priority — listed after phrases)
         "১ম": "১ম", "২য়": "২য়", "৩য়": "৩য়", "৪র্থ": "৪র্থ",
         "৫ম": "৫ম", "৬ষ্ঠ": "৬ষ্ঠ", "৭ম": "৭ম", "৮ম": "৮ম",
-        # English ordinals — ONLY in semester_map now
         "1st": "১ম", "2nd": "২য়", "3rd": "৩য়", "4th": "৪র্থ",
         "5th": "৫ম", "6th": "৬ষ্ঠ", "7th": "৭ম", "8th": "৮ম",
     }
@@ -151,13 +118,7 @@ def extract_context(q_original, history=None):
     ctx["day"]        = _find_earliest_match(day_map, all_text)
     ctx["floor"]      = _find_earliest_match(floor_map, all_text)
 
-    # ----------------------------------------------------------------
-    # CONTEXT-AWARE shift detection:
-    # Look for patterns like "1st shift", "2nd shift", "first shift",
-    # "morning shift" etc. before falling back to shift_map.
-    # This correctly handles "1st shift 2nd semester" by anchoring the
-    # ordinal to the word "shift" rather than letting it float freely.
-    # ----------------------------------------------------------------
+
     shift_pattern = re.search(
         r'(১ম|প্রথম|first|1st|morning|মর্নিং)\s*(শিফট|shift)?|'
         r'(২য়|দ্বিতীয়|second|2nd|day|ডে)\s*(শিফট|shift)',
@@ -172,14 +133,7 @@ def extract_context(q_original, history=None):
     else:
         ctx["shift"] = _find_earliest_match(shift_map, all_text)
 
-    # ----------------------------------------------------------------
-    # CONTEXT-AWARE semester detection:
-    # After shift is resolved, find the semester ordinal that is NOT
-    # the one already consumed by shift detection.
-    # Strategy: find ALL ordinal matches in the text, then pick the one
-    # closest to the word "semester/সেমিস্টার" if present, otherwise
-    # pick the one that doesn't match the shift value.
-    # ----------------------------------------------------------------
+
     semester_from_map = _find_earliest_match(semester_map, all_text)
 
     # If the semester_map picked the same ordinal as shift (e.g. both
@@ -188,15 +142,12 @@ def extract_context(q_original, history=None):
         shift_en_map = {"১ম": "1st", "২য়": "2nd"}
         shift_en = shift_en_map.get(ctx["shift"], "")
 
-        # Find the position of the shift-related ordinal
         shift_ordinals = {
             "১ম": ["১ম", "প্রথম", "1st", "first", "morning", "মর্নিং"],
             "২য়": ["২য়", "দ্বিতীয়", "2nd", "second", "day", "ডে"],
         }
         shift_keywords = shift_ordinals.get(ctx["shift"], [])
 
-        # Check if semester_from_map was actually the shift ordinal appearing first
-        # by seeing if the earliest semester key is also a shift keyword
         earliest_sem_key = None
         earliest_sem_idx = None
         for key, val in semester_map.items():
@@ -206,8 +157,7 @@ def extract_context(q_original, history=None):
                 earliest_sem_key = key
 
         if earliest_sem_key and earliest_sem_key in shift_keywords:
-            # The semester map's earliest match is actually the shift word.
-            # Find the SECOND ordinal — search for semester keyword proximity.
+           
             sem_keyword_idx = all_text.find("semester")
             if sem_keyword_idx == -1:
                 sem_keyword_idx = all_text.find("সেমিস্টার")
@@ -216,7 +166,7 @@ def extract_context(q_original, history=None):
             best_dist = None
             for key, val in semester_map.items():
                 if key in shift_keywords:
-                    continue  # skip the shift ordinal
+                    continue  
                 idx = all_text.find(key)
                 if idx == -1:
                     continue
@@ -227,7 +177,7 @@ def extract_context(q_original, history=None):
                         best_key = key
                         semester_from_map = val
                 else:
-                    # No "semester" word in text — just pick the next ordinal
+                    
                     if best_key is None:
                         best_key = key
                         semester_from_map = val
@@ -237,9 +187,9 @@ def extract_context(q_original, history=None):
     return ctx
 
 
-# ==============================
-# DYNAMIC TEACHER SEARCH
-# ==============================
+
+# TEACHER SEARCH
+
 def search_teachers(q_raw, ctx):
     try:
         results = []
@@ -287,9 +237,9 @@ def search_teachers(q_raw, ctx):
         return []
 
 
-# ==============================
-# DYNAMIC ROUTINE SEARCH
-# ==============================
+
+# ROUTINE SEARCH
+
 def search_routines(q_raw, ctx):
     try:
         query = supabase.table("routines").select(
@@ -331,9 +281,9 @@ def search_routines(q_raw, ctx):
         return []
 
 
-# ==============================
-# DYNAMIC LOCATION SEARCH
-# ==============================
+
+# LOCATION SEARCH
+
 def search_locations(q_raw, ctx):
     try:
         location_terms = [
@@ -343,8 +293,8 @@ def search_locations(q_raw, ctx):
             "অফিস", "office", "কক্ষ", "room", "gate", "গেট",
             "mosque", "মসজিদ", "field", "মাঠ", "parking", "পার্কিং",
             "wiring", "hardware", "electrical", "computer",
-            "civil", "mechanical","physics lab", "chemistry", "workshop", "wood shop", "ওয়ার্কশপ",
-            "center", "centre", "কেন্দ্র",
+            "civil", "mechanical",  "workshop", "ওয়ার্কশপ",
+            "center", "centre", "কেন্দ্র", "chemistry","physics", "wood shop",
         ]
 
         room_numbers = re.findall(r'\b\d{2,4}\b', q_raw)
@@ -370,7 +320,7 @@ def search_locations(q_raw, ctx):
                 )
                 if ctx["floor"]:
                     query = query.ilike("floor", f"%{ctx['floor']}%")
-                result = query.limit(20).execute()
+                result = query.limit(107).execute()
                 if result.data:
                     return result.data
 
@@ -389,9 +339,9 @@ def search_locations(q_raw, ctx):
         return []
 
 
-# ==============================
-# DYNAMIC QA SEARCH
-# ==============================
+
+# QA SEARCH
+
 def search_qa(q_raw):
     try:
         result = supabase.table("qa").select("question,answer") \
@@ -431,7 +381,7 @@ def search_qa(q_raw):
 
         result = supabase.table("qa").select("question,answer") \
             .not_.is_("answer", "null") \
-            .limit(100).execute()
+            .limit(20).execute()
 
         print(f"QA fallback: {len(result.data or [])} rows", flush=True)
         return result.data or []
@@ -441,15 +391,15 @@ def search_qa(q_raw):
         return []
 
 
-# ==============================
+
 # SMART DATA FETCHING (RAG)
-# ==============================
+
 def get_relevant_data(user_question, history=None):
     ctx = extract_context(user_question, history)
     q = user_question.lower()
     data = ""
 
-    # Debug log so you can verify ctx values in production
+ 
     print(f"CTX → dept={ctx['department']} shift={ctx['shift']} "
           f"sem={ctx['semester']} group={ctx['group']} day={ctx['day']}", flush=True)
 
@@ -516,7 +466,7 @@ def get_relevant_data(user_question, history=None):
             "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor",
             "lab", "laboratory", "center", "centre", "wiring",
             "hardware", "ল্যাব", "কেন্দ্র", "gate", "গেট",
-            "mosque", "মসজিদ", "field", "মাঠ", "অফিস", "office"
+            "mosque", "মসজিদ", "field", "মাঠ", "অফিস", "office", "physics", "chemistry"
         ]):
             rows = search_locations(user_question, ctx)
             if rows:
@@ -570,9 +520,9 @@ def build_system_prompt(user_question="", history=None):
 {relevant_data}"""
 
 
-# ==============================
+
 # ERROR LOGGER → SUPABASE
-# ==============================
+
 def log_error(error_type, user_message, error_detail):
     try:
         supabase.table("error_logs").insert({
@@ -584,9 +534,9 @@ def log_error(error_type, user_message, error_detail):
         print(f"Error log save failed: {e}", flush=True)
 
 
-# ==============================
+
 # GEMINI RESPONSE
-# ==============================
+
 def get_response(system_prompt, history, user_input):
     try:
         model = genai.GenerativeModel(
@@ -609,9 +559,9 @@ def get_response(system_prompt, history, user_input):
         return None, str(e)
 
 
-# ==============================
+
 # HELPERS
-# ==============================
+
 def save_conversation(user_message, bot_reply):
     try:
         supabase.table("conversations").insert({
@@ -622,9 +572,9 @@ def save_conversation(user_message, bot_reply):
         print(f"Conversation save error: {e}", flush=True)
 
 
-# ==============================
+
 # ROUTES
-# ==============================
+
 @app.route("/")
 def home():
     return render_template("index.html")
