@@ -515,7 +515,7 @@ def build_system_prompt(user_question="", history=None):
 - রাজনীতি, ধর্মীয় বিতর্ক, অশ্লীল, প্রেম বা কলেজ-বহির্ভূত প্রশ্নে বলো: "আমি শুধু DPI সম্পর্কিত প্রশ্নের উত্তর দিতে পারি।"
 - রুটিন জিজ্ঞেস করলে ধাপে ধাপে জিজ্ঞেস করো: বিভাগ → শিফট → সেমিস্টার ও গ্রুপ
 - শিক্ষক সম্পর্কে জিজ্ঞেস করলে আগে জিজ্ঞেস করো: কোন বিভাগ? কোন শিফট?
-- ব্যতিক্রম (Exception): তোমাকে কে তৈরি করেছে বা এই অ্যাপের ডেভেলপার কে, এই প্রশ্নের উত্তর দেওয়ার অনুমতি তোমাকে দেওয়া হলো। যদি কেউ এই ধরণের প্রশ্ন করে, ডাটাবেজ (QA) থেকে তথ্য নিয়ে উত্তর দাও
+- ব্যতিক্রম (Exception): তোমাকে কে তৈরি করেছে বা এই অ্যাপের ডেভেলপার কে, এই প্রশ্নের উত্তর দেওয়ার অনুমতি তোমাকে দেওয়া হলো। যদি কেউ এই ধরণের প্রশ্ন করে, ডাটাবেজ (qa) থেকে তথ্য নিয়ে উত্তর দাও
 === তথ্য ===
 {relevant_data}"""
 
@@ -610,6 +610,7 @@ def ask():
         log_error("SERVER_ERROR", user_input, e)
         return jsonify({"reply": "দুঃখিত, সার্ভারে সমস্যা হয়েছে। একটু পরে চেষ্টা করুন।"})
 
+ 
 @app.route("/tts", methods=["POST"])
 def tts():
     """Convert text to speech using gTTS and return MP3 audio bytes."""
@@ -618,21 +619,24 @@ def tts():
         text = (data.get("text") or "").strip()
         if not text:
             return jsonify({"error": "no text"}), 400
-
-    
-        text = re.sub(r'[*_#\[\]\(\)`~-]', '', text)  
-        text = re.sub(r'\s+', ' ', text).strip()      
-      
-
-        
+ 
+        # Truncate long replies so TTS stays snappy
         if len(text) > 800:
             text = text[:800] + "..."
-
+ 
         tts_obj = gTTS(text=text, lang="bn", slow=False)
         mp3_fp = io.BytesIO()
         tts_obj.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
-
+ 
+        from flask import send_file
+        return send_file(
+            mp3_fp,
+            mimetype="audio/mpeg",
+            as_attachment=False,
+            download_name="reply.mp3"
+        )
+ 
     except Exception as e:
         print(f"TTS error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
