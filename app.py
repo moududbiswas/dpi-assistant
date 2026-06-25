@@ -1,5 +1,7 @@
 import os
 import re
+from gtts import gTTS
+import io
 from flask import Flask, render_template, request, jsonify
 import google.generativeai as genai
 from supabase import create_client
@@ -658,6 +660,35 @@ def ask():
         log_error("SERVER_ERROR", user_input, e)
         return jsonify({"reply": "দুঃখিত, সার্ভারে সমস্যা হয়েছে। একটু পরে চেষ্টা করুন।"})
 
+@app.route("/tts", methods=["POST"])
+def tts():
+    """Convert text to speech using gTTS and return MP3 audio bytes."""
+    try:
+        data = request.json
+        text = (data.get("text") or "").strip()
+        if not text:
+            return jsonify({"error": "no text"}), 400
+ 
+        # Truncate long replies so TTS stays snappy
+        if len(text) > 800:
+            text = text[:800] + "..."
+ 
+        tts_obj = gTTS(text=text, lang="bn", slow=False)
+        mp3_fp = io.BytesIO()
+        tts_obj.write_to_fp(mp3_fp)
+        mp3_fp.seek(0)
+ 
+        from flask import send_file
+        return send_file(
+            mp3_fp,
+            mimetype="audio/mpeg",
+            as_attachment=False,
+            download_name="reply.mp3"
+        )
+ 
+    except Exception as e:
+        print(f"TTS error: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

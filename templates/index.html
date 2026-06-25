@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>DPI Assistant</title>
     <link href="https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@300;400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
-    <link rel="shortcut icon" href="/static/image/WhatsApp Image 2026-05-13 at 3.29.25 PM.jpeg" type="image/x-icon">
+    <link rel="shortcut icon" style="border-radius: 2px ;" href="/static/image/WhatsApp Image 2026-05-13 at 3.29.25 PM.jpeg" type="image/x-icon">
     <style>
         :root {
             --navy:     #1a2f8a;
@@ -45,7 +45,6 @@
             position: relative;
         }
 
-        /* Subtle blueprint grid background */
         body::before {
             content: '';
             position: fixed;
@@ -58,7 +57,6 @@
             z-index: 0;
         }
 
-        /* Decorative corner gear */
         body::after {
             content: '';
             position: fixed;
@@ -86,7 +84,6 @@
             box-shadow: 0 1px 0 var(--border), 0 2px 12px rgba(26,47,138,0.07);
         }
 
-        /* Subtle navy left accent bar */
         header::before {
             content: '';
             position: absolute;
@@ -158,8 +155,6 @@
             0%,100% { opacity:1; transform:scale(1); }
             50%      { opacity:0.5; transform:scale(0.7); }
         }
-
-
 
         /* ── CHAT BOX ── */
         #chatbox {
@@ -349,6 +344,60 @@
             letter-spacing: 0.2px;
         }
 
+        /* ── SOUNDBAR ANIMATION ── */
+        .soundbar {
+            display: inline-flex;
+            align-items: flex-end;
+            gap: 2.5px;
+            height: 18px;
+            margin-left: 10px;
+            vertical-align: middle;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        .soundbar.playing {
+            opacity: 1;
+        }
+        .soundbar-bar {
+            width: 3px;
+            border-radius: 2px;
+            animation: none;
+            height: 4px;
+            transition: height 0.1s ease;
+        }
+        .soundbar-bar:nth-child(1) { background: var(--navy); }
+        .soundbar-bar:nth-child(2) { background: var(--cyan); }
+        .soundbar-bar:nth-child(3) { background: var(--navy-l); }
+        .soundbar-bar:nth-child(4) { background: var(--cyan); }
+        .soundbar-bar:nth-child(5) { background: var(--navy); }
+
+        .soundbar.playing .soundbar-bar:nth-child(1) {
+            animation: bar-dance 0.9s ease-in-out infinite;
+            animation-delay: 0s;
+        }
+        .soundbar.playing .soundbar-bar:nth-child(2) {
+            animation: bar-dance 0.7s ease-in-out infinite;
+            animation-delay: 0.15s;
+        }
+        .soundbar.playing .soundbar-bar:nth-child(3) {
+            animation: bar-dance 1.1s ease-in-out infinite;
+            animation-delay: 0.05s;
+        }
+        .soundbar.playing .soundbar-bar:nth-child(4) {
+            animation: bar-dance 0.8s ease-in-out infinite;
+            animation-delay: 0.25s;
+        }
+        .soundbar.playing .soundbar-bar:nth-child(5) {
+            animation: bar-dance 1.0s ease-in-out infinite;
+            animation-delay: 0.1s;
+        }
+
+        @keyframes bar-dance {
+            0%, 100% { height: 4px;  opacity: 0.5; }
+            25%       { height: 14px; opacity: 1;   }
+            50%       { height: 8px;  opacity: 0.8; }
+            75%       { height: 16px; opacity: 1;   }
+        }
 
         /* ── INPUT AREA ── */
         .input-area {
@@ -451,7 +500,6 @@
     </div>
 </header>
 
-
 <div id="chatbox">
     <div class="welcome" id="welcome">
         <div class="welcome-logo">
@@ -479,10 +527,11 @@
 </div>
 
 <script>
-    // Logo base64 - same data used in CSS
     const LOGO_SRC = "/static/image/WhatsApp Image 2026-05-13 at 3.29.25 PM.jpeg";
 
     let history = [];
+    let currentAudio = null;
+    let currentSoundbar = null;
 
     const textarea = document.getElementById('userInput');
     textarea.addEventListener('input', function() {
@@ -496,6 +545,77 @@
     function quickAsk(text) {
         document.getElementById('userInput').value = text;
         sendMessage();
+    }
+
+    /* ── Build soundbar DOM ── */
+    function buildSoundbar() {
+        const bar = document.createElement('span');
+        bar.className = 'soundbar';
+        for (let i = 0; i < 5; i++) {
+            const b = document.createElement('span');
+            b.className = 'soundbar-bar';
+            bar.appendChild(b);
+        }
+        return bar;
+    }
+
+    /* ── Play TTS for a reply, animate soundbar ── */
+    async function speakReply(plainText, soundbarEl) {
+        // Stop any currently playing audio
+        if (currentAudio) {
+            currentAudio.pause();
+            currentAudio = null;
+        }
+        if (currentSoundbar) {
+            currentSoundbar.classList.remove('playing');
+            currentSoundbar = null;
+        }
+
+        try {
+            const res = await fetch('/tts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: plainText })
+            });
+
+            if (!res.ok) return;
+
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            currentAudio = audio;
+            currentSoundbar = soundbarEl;
+
+            audio.addEventListener('play', () => {
+                soundbarEl.classList.add('playing');
+            });
+            audio.addEventListener('ended', () => {
+                soundbarEl.classList.remove('playing');
+                URL.revokeObjectURL(url);
+                currentAudio = null;
+                currentSoundbar = null;
+            });
+            audio.addEventListener('pause', () => {
+                soundbarEl.classList.remove('playing');
+            });
+            audio.addEventListener('error', () => {
+                soundbarEl.classList.remove('playing');
+                currentAudio = null;
+                currentSoundbar = null;
+            });
+
+            await audio.play();
+        } catch (e) {
+            console.warn('TTS error:', e);
+            if (soundbarEl) soundbarEl.classList.remove('playing');
+        }
+    }
+
+    /* ── Strip HTML tags to get plain text for TTS ── */
+    function stripHtml(html) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        return tmp.textContent || tmp.innerText || '';
     }
 
     function addMessage(content, role) {
@@ -518,11 +638,19 @@
         bubble.className = 'bubble ' + role;
         bubble.innerHTML = content;
 
+        /* Add soundbar at the end of AI bubbles */
+        let soundbarEl = null;
+        if (role === 'ai') {
+            soundbarEl = buildSoundbar();
+            bubble.appendChild(soundbarEl);
+        }
+
         row.appendChild(avatar);
         row.appendChild(bubble);
         chatbox.appendChild(row);
         chatbox.scrollTop = chatbox.scrollHeight;
-        return bubble;
+
+        return { bubble, soundbarEl };
     }
 
     function addTyping() {
@@ -555,7 +683,6 @@
         chatbox.scrollTop = chatbox.scrollHeight;
     }
 
-
     async function sendMessage() {
         const input = document.getElementById('userInput');
         const message = input.value.trim();
@@ -577,10 +704,16 @@
             const data = await res.json();
             document.getElementById('typing-row')?.remove();
 
-            addMessage(data.reply, 'ai');
+            const { soundbarEl } = addMessage(data.reply, 'ai');
 
             history.push({ role: 'user', content: message });
             history.push({ role: 'assistant', content: data.reply });
+
+            /* Auto read aloud */
+            if (soundbarEl) {
+                const plainText = stripHtml(data.reply);
+                speakReply(plainText, soundbarEl);
+            }
 
         } catch (err) {
             document.getElementById('typing-row')?.remove();
