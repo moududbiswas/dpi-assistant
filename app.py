@@ -343,7 +343,7 @@ def search_locations(q_raw, ctx):
             "অফিস", "office", "কক্ষ", "room", "gate", "গেট",
             "mosque", "মসজিদ", "field", "মাঠ", "parking", "পার্কিং",
             "wiring", "hardware", "electrical", "computer",
-            "civil", "mechanical","physics", "chemistry", "workshop", "wood", "ওয়ার্কশপ",
+            "civil", "mechanical","physics lab", "chemistry", "workshop", "wood shop", "ওয়ার্কশপ",
             "center", "centre", "কেন্দ্র",
         ]
 
