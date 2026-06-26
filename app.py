@@ -381,7 +381,7 @@ def search_qa(q_raw):
 
         result = supabase.table("qa").select("question,answer") \
             .not_.is_("answer", "null") \
-            .limit(20).execute()
+            .limit(35).execute()
 
         print(f"QA fallback: {len(result.data or [])} rows", flush=True)
         return result.data or []
