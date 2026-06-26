@@ -414,7 +414,7 @@ def get_relevant_data(user_question, history=None):
         if any(w in q_with_history for w in [
             "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
             "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
-            "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroo"
+            "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroom"
         ]):
             rows = search_routines(user_question, ctx)
             if rows:
@@ -433,7 +433,7 @@ def get_relevant_data(user_question, history=None):
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
             "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
             "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-            "who is", "কে আছেন", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
+            "who is", "কে আছেন","sir" "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
         ]) or ctx["short_names"]:
             rows = search_teachers(user_question, ctx)
             if rows:
