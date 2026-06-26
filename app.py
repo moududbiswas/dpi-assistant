@@ -515,7 +515,7 @@ def build_system_prompt(user_question="", history=None):
 - রাজনীতি, ধর্মীয় বিতর্ক, অশ্লীল, প্রেম বা কলেজ-বহির্ভূত প্রশ্নে বলো: "আমি শুধু DPI সম্পর্কিত প্রশ্নের উত্তর দিতে পারি।"
 - রুটিন জিজ্ঞেস করলে ধাপে ধাপে জিজ্ঞেস করো: বিভাগ → শিফট → সেমিস্টার ও গ্রুপ
 - শিক্ষক সম্পর্কে জিজ্ঞেস করলে আগে জিজ্ঞেস করো: কোন বিভাগ? কোন শিফট?
-- ব্যতিক্রম (Exception): তোমাকে কে তৈরি করেছে বা এই অ্যাপের ডেভেলপার কে, এই প্রশ্নের উত্তর দেওয়ার অনুমতি তোমাকে দেওয়া হলো। যদি কেউ এই ধরণের প্রশ্ন করে, ডাটাবেজ (qa) থেকে তথ্য নিয়ে উত্তর দাও
+- তোমাকে তৈরি করেছে ঢাকা পলিটেকনিক ইন্সটিটিউটের ইলেক্টিক্যাল টেকনোলজি এর ২০২৩-২৪ সেশনের ২ জন ছাত্র। তারা হলো মো:মওদুদ বিশ্বাস ও সাকিন আল আনফি
 === তথ্য ===
 {relevant_data}"""
 
@@ -619,16 +619,29 @@ def tts():
         text = (data.get("text") or "").strip()
         if not text:
             return jsonify({"error": "no text"}), 400
- 
-        # Truncate long replies so TTS stays snappy
+
+        text = re.sub(r'#{1,6}\s*', '', text)           # headers
+        text = re.sub(r'\*{1,3}', '', text)              # bold / italic *
+        text = re.sub(r'_{1,3}', '', text)               # bold / italic _
+        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)   # bullet lists
+        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)   # numbered lists
+        text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE) # horizontal rules ---
+        text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)        # blockquotes
+        text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)                  # inline/block code
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)          # links → keep label
+        text = re.sub(r'\|', ' ', text)                  # table pipes
+        text = re.sub(r'\n{2,}', '\n', text)             # collapse blank lines
+        text = re.sub(r'[ \t]{2,}', ' ', text)           # collapse spaces
+        text = text.strip()
+
         if len(text) > 800:
             text = text[:800] + "..."
- 
+
         tts_obj = gTTS(text=text, lang="bn", slow=False)
         mp3_fp = io.BytesIO()
         tts_obj.write_to_fp(mp3_fp)
         mp3_fp.seek(0)
- 
+
         from flask import send_file
         return send_file(
             mp3_fp,
@@ -636,7 +649,7 @@ def tts():
             as_attachment=False,
             download_name="reply.mp3"
         )
- 
+
     except Exception as e:
         print(f"TTS error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
