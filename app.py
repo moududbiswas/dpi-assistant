@@ -109,7 +109,11 @@ def extract_context(q_original, history=None):
         "department": None, "shift": None, "semester": None,
         "day": None, "floor": None,
         "group": group_match[0] if group_match else None,
-        "short_names": re.findall(r'\b[A-Z]{2,5}\b', q),
+        # Case-insensitive short-name matching: previously [A-Z]{2,5} only
+        # matched all-caps codes (e.g. "MAH"); lowercase/mixed-case codes
+        # like "mah" were silently ignored. Now we match either case and
+        # normalize to uppercase so downstream ilike() lookups still work.
+        "short_names": [s.upper() for s in re.findall(r'\b[A-Za-z]{2,5}\b', q)],
     }
 
     all_text = ql + " " + history_combined
@@ -190,38 +194,63 @@ def extract_context(q_original, history=None):
 
 # TEACHER SEARCH
 
+def _teacher_base_query(department=None):
+    """Build a fresh teacher-select query builder.
+
+    IMPORTANT: supabase-py / postgrest-py query builders mutate themselves
+    in place when you call .eq()/.ilike()/etc and return `self`, not a new
+    copy. Reusing one builder variable for both a "filtered" attempt and a
+    "fallback" attempt means the fallback silently ends up with the same
+    filters still applied (previously .eq("shift", ...) permanently
+    "stuck" onto the base query). This helper always returns a brand new
+    query object so filters never leak between attempts.
+    """
+    query = supabase.table("teachers").select(
+        "name,subject,short_name,designation,department,shift,contact_number"
+    )
+    if department:
+        query = query.ilike("department", f"%{department}%")
+    return query
+
+
 def search_teachers(q_raw, ctx):
     try:
         results = []
 
         if ctx["short_names"]:
             for sn in ctx["short_names"]:
-                query = supabase.table("teachers").select(
-                    "name,subject,short_name,designation,department,shift,contact_number"
-                ).or_(
+                # Fresh builder per attempt so filters don't leak.
+                filtered_query = _teacher_base_query(ctx["department"]).or_(
                     f"short_name.ilike.%{sn}%,name.ilike.%{sn}%"
                 )
-                if ctx["department"]:
-                    query = query.ilike("department", f"%{ctx['department']}%")
+
                 if ctx["shift"]:
-                    r = query.eq("shift", ctx["shift"]).execute()
+                    r = filtered_query.eq("shift", ctx["shift"]).execute()
                     if r.data:
                         results.extend(r.data)
                         continue
-                r = query.execute()
-                results.extend(r.data or [])
+                    # Real fallback: brand new query, no shift filter stuck on it.
+                    fallback_query = _teacher_base_query(ctx["department"]).or_(
+                        f"short_name.ilike.%{sn}%,name.ilike.%{sn}%"
+                    )
+                    r = fallback_query.execute()
+                    results.extend(r.data or [])
+                else:
+                    r = filtered_query.execute()
+                    results.extend(r.data or [])
 
         if not results:
-            query = supabase.table("teachers").select(
-                "name,subject,short_name,designation,department,shift,contact_number"
-            )
-            if ctx["department"]:
-                query = query.ilike("department", f"%{ctx['department']}%")
+            base_query = _teacher_base_query(ctx["department"])
             if ctx["shift"]:
-                r = query.eq("shift", ctx["shift"]).execute()
-                results = r.data if r.data else query.execute().data or []
+                r = base_query.eq("shift", ctx["shift"]).execute()
+                if r.data:
+                    results = r.data
+                else:
+                    # Real fallback: fresh query without the shift filter.
+                    fallback_query = _teacher_base_query(ctx["department"])
+                    results = fallback_query.limit(60).execute().data or []
             else:
-                results = query.limit(60).execute().data or []
+                results = base_query.limit(60).execute().data or []
 
         seen = set()
         unique = []
@@ -433,7 +462,7 @@ def get_relevant_data(user_question, history=None):
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
             "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
             "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-            "who is", "কে আছেন","sir" "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
+            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
         ]) or ctx["short_names"]:
             rows = search_teachers(user_question, ctx)
             if rows:
@@ -513,8 +542,8 @@ def build_system_prompt(user_question="", history=None):
 - শুধুমাত্র নিচের তথ্য থেকে উত্তর দাও
 - তথ্য না থাকলে বলো: "দুঃখিত, এই তথ্যটি আমার কাছে নেই। টিমকে জানান।"
 - রাজনীতি, ধর্মীয় বিতর্ক, অশ্লীল, প্রেম বা কলেজ-বহির্ভূত প্রশ্নে বলো: "আমি শুধু DPI সম্পর্কিত প্রশ্নের উত্তর দিতে পারি।"
-- রুটিন জিজ্ঞেস করলে ধাপে ধাপে জিজ্ঞেস করো: বিভাগ → শিফট → সেমিস্টার ও গ্রুপ
-- শিক্ষক সম্পর্কে জিজ্ঞেস করলে আগে জিজ্ঞেস করো: কোন বিভাগ? কোন শিফট?
+- রুটিন জিজ্ঞেস করলে, যদি নিচের তথ্যে ইতিমধ্যে বিভাগ/শিফট/সেমিস্টার অনুযায়ী উত্তর থাকে তাহলে সরাসরি উত্তর দাও; তথ্য না থাকলে বা অস্পষ্ট হলে ধাপে ধাপে জিজ্ঞেস করো: বিভাগ → শিফট → সেমিস্টার ও গ্রুপ
+- শিক্ষক সম্পর্কে জিজ্ঞেস করলে, যদি নিচের "শিক্ষক তালিকা" তথ্যে উত্তর থাকে তাহলে সরাসরি সেখান থেকে উত্তর দাও; একাধিক ফলাফল থাকলে বা তথ্য না পেলে তখনই জিজ্ঞেস করো: কোন বিভাগ? কোন শিফট?
 - তোমাকে তৈরি করেছে ঢাকা পলিটেকনিক ইনস্টিটিউট এর ইলেকট্রিক্যাল টেকনোলজির ২০২৩ - ২০২৪ সেশনের ৩ জন ছাত্র। তারা হলো সাকিন আল আনফি, মুওদুদ বিশ্বাস,নাফিজুর রহমান নূর।
 - ক্যাম্পাস অফিস টাইম ২ ভাগে বিভক্ত।প্রথম শিফটের জন্য সকাল ৭ টা থেকে ১:১৫ দ্বিতীয় শিফটের জন্য ১:১৫ থেকে ৫:৩০
 === তথ্য ===
