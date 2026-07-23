@@ -25,7 +25,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-MAX_CONTEXT_CHARS = 20000
+MAX_CONTEXT_CHARS = 30000
 
 
 
@@ -194,6 +194,29 @@ def extract_context(q_original, history=None):
 
 # TEACHER SEARCH
 
+def _get_full_teacher_directory():
+    """Fallback used when structured ilike filters find no match.
+
+    Full names typed in Latin/Banglish (e.g. "farzana akter") can never
+    ilike-match a Bangla-script `name` column (e.g. "ফারজানা আক্তার") —
+    it's not a fuzzy-matching gap, they're literally different alphabets.
+    Short codes work today only because short_name is stored in Latin.
+
+    Rather than silently returning [] for every full-name query, we hand
+    Gemini the compact full directory so it can do the cross-script name
+    matching itself (it's good at this), instead of relying on it to
+    happen to work by accident via the generic QA fallback.
+    """
+    try:
+        result = supabase.table("teachers").select(
+            "name,short_name,department,shift,designation,contact_number"
+        ).order("name").limit(300).execute()
+        return result.data or []
+    except Exception as e:
+        print(f"Teacher directory fetch error: {e}", flush=True)
+        return []
+
+
 def _teacher_base_query(department=None):
     """Build a fresh teacher-select query builder.
 
@@ -259,7 +282,15 @@ def search_teachers(q_raw, ctx):
                 seen.add(t["name"])
                 unique.append(t)
 
-        return unique
+        if unique:
+            return unique
+
+        # Structured ilike matching found nothing — most likely a full
+        # Bangla name was typed in Latin/Banglish. Fall back to the full
+        # directory so Gemini can match it by reasoning instead of us
+        # silently returning [] (see _get_full_teacher_directory docstring).
+        print("Teacher search: no ilike match, falling back to full directory", flush=True)
+        return _get_full_teacher_directory()
 
     except Exception as e:
         print(f"Teacher search error: {e}", flush=True)
@@ -462,7 +493,7 @@ def get_relevant_data(user_question, history=None):
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
             "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
             "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত", "maam", "ma'am"
+            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
         ]) or ctx["short_names"]:
             rows = search_teachers(user_question, ctx)
             if rows:
