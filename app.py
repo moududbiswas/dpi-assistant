@@ -41,6 +41,21 @@ def _find_earliest_match(mapping, text):
 
 
 
+# Ordinary 2-5 letter English words that must NEVER be treated as a teacher
+# short-name/initials code (e.g. "who is farzana akter maam" must not turn
+# into short_names ["WHO", "IS", "MAAM"]).
+_SHORT_NAME_STOPWORDS = {
+    "WHO", "IS", "ARE", "WAS", "WERE", "AM", "BE", "BEEN", "BEING",
+    "THE", "A", "AN", "OF", "TO", "IN", "ON", "AT", "BY", "OR", "AND",
+    "IT", "AS", "DO", "DOES", "DID", "IF", "MY", "ME", "HE", "SHE",
+    "HIS", "HER", "HIM", "THIS", "THAT", "WHAT", "WHEN", "WHERE",
+    "WHY", "HOW", "CAN", "WILL", "WOULD", "COULD", "SHOULD", "HAS",
+    "HAVE", "HAD", "US", "OUR", "YOUR", "THEIR", "SIR", "MAAM", "MAM",
+    "MADAM", "NAME", "ABOUT", "TELL", "PLEASE", "WITH", "FOR", "FROM",
+    "SOME", "ANY", "ALL", "NOT", "NO", "YES", "OK", "OKAY",
+}
+
+
 def extract_context(q_original, history=None):
     """Extract department, shift, semester, day, floor from question + history."""
     q = q_original          # keep original for short_names regex
@@ -113,7 +128,12 @@ def extract_context(q_original, history=None):
         # matched all-caps codes (e.g. "MAH"); lowercase/mixed-case codes
         # like "mah" were silently ignored. Now we match either case and
         # normalize to uppercase so downstream ilike() lookups still work.
-        "short_names": [s.upper() for s in re.findall(r'\b[A-Za-z]{2,5}\b', q)],
+        # Common English function words are filtered out below (_SHORT_NAME_STOPWORDS)
+        # so "who is ... maam" doesn't get parsed as teacher initials "WHO"/"IS"/"MAAM".
+        "short_names": [
+            s.upper() for s in re.findall(r'\b[A-Za-z]{2,5}\b', q)
+            if s.upper() not in _SHORT_NAME_STOPWORDS
+        ],
     }
 
     all_text = ql + " " + history_combined
@@ -262,7 +282,11 @@ def search_teachers(q_raw, ctx):
                     r = filtered_query.execute()
                     results.extend(r.data or [])
 
-        if not results:
+        if not results and not ctx["short_names"]:
+            # No short-name signal at all -> this is a genuine generic
+            # department/shift browse query (e.g. "electrical department
+            # 2nd shift teachers"), so an unfiltered/lightly-filtered
+            # browse fetch is appropriate here.
             base_query = _teacher_base_query(ctx["department"])
             if ctx["shift"]:
                 r = base_query.eq("shift", ctx["shift"]).execute()
@@ -274,6 +298,13 @@ def search_teachers(q_raw, ctx):
                     results = fallback_query.limit(60).execute().data or []
             else:
                 results = base_query.limit(60).execute().data or []
+
+        # NOTE: if ctx["short_names"] was non-empty but every attempt above
+        # found nothing (typical for a full Bangla name typed in Latin/
+        # Banglish, e.g. "farzana akter"), we deliberately do NOT fall back
+        # to an unfiltered browse dump here -- that would silently return
+        # unrelated teachers and mask the real problem. Instead we fall
+        # through to the full-directory fallback below.
 
         seen = set()
         unique = []
