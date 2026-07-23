@@ -8,7 +8,9 @@ from supabase import create_client
 
 app = Flask(__name__)
 
+
 # CONFIG
+
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     print("ERROR: GEMINI_API_KEY is not set!", flush=True)
@@ -16,6 +18,7 @@ else:
     print("GEMINI_API_KEY loaded OK", flush=True)
 
 genai.configure(api_key=GEMINI_API_KEY)
+
 GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -25,7 +28,6 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 MAX_CONTEXT_CHARS = 30000
 
 
-# ==================== UTILITIES ====================
 
 def _find_earliest_match(mapping, text):
     best_value = None
@@ -38,12 +40,10 @@ def _find_earliest_match(mapping, text):
     return best_value
 
 
-def contains_bangla(text):
-    """Check if text contains Bengali Unicode characters."""
-    return bool(re.search(r'[\u0980-\u09FF]', text))
 
-
-# Ordinary English words that must NEVER be treated as teacher short-names
+# Ordinary 2-5 letter English words that must NEVER be treated as a teacher
+# short-name/initials code (e.g. "who is farzana akter maam" must not turn
+# into short_names ["WHO", "IS", "MAAM"]).
 _SHORT_NAME_STOPWORDS = {
     "WHO", "IS", "ARE", "WAS", "WERE", "AM", "BE", "BEEN", "BEING",
     "THE", "A", "AN", "OF", "TO", "IN", "ON", "AT", "BY", "OR", "AND",
@@ -52,136 +52,46 @@ _SHORT_NAME_STOPWORDS = {
     "WHY", "HOW", "CAN", "WILL", "WOULD", "COULD", "SHOULD", "HAS",
     "HAVE", "HAD", "US", "OUR", "YOUR", "THEIR", "SIR", "MAAM", "MAM",
     "MADAM", "NAME", "ABOUT", "TELL", "PLEASE", "WITH", "FOR", "FROM",
-    "SOME", "ANY", "ALL", "NOT", "NO", "YES", "OK", "OKAY", "TEACHER",
-    "STUDENT", "CLASS", "ROOM", "TIME", "DAY", "SHIFT", "DEPT", "HOD",
-    "HEAD", "CHIEF", "NUMBER", "PHONE", "CONTACT", "CALL", "FIND",
-    "WHERE", "THERE", "HERE", "NOW", "THEN", "THAN", "THEM", "THEY",
-    "THOSE", "THESE", "VERY", "MUCH", "MANY", "MORE", "MOST", "OTHER",
-    "ANOTHER", "SUCH", "ONLY", "OWN", "SAME", "SO", "THAN", "TOO",
-    "VERY", "JUST", "ALSO", "BACK", "AFTER", "USE", "TWO", "HOW",
-    "ITS", "OUR", "OUT", "UP", "WAY", "WHO", "OIL", "SIT", "SET",
-    "RUN", "EAT", "EYE", "AGO", "OFF", "TOO", "OLD", "TELL", "VERY",
-    "WHEN", "MUCH", "WOULD", "THERE", "THEIR", "SAID", "EACH", "WHICH",
-    "SHE", "DO", "HOW", "HIS", "HER", "HIM", "HAS", "HAD", "HAVE",
-    "BUT", "NOT", "WERE", "THEY", "BEEN", "HAS", "HAD", "DID", "WILL",
-    "SAID", "EACH", "MAKE", "LIKE", "INTO", "TIME", "LOOK", "MORE",
-    "WRITE", "GOOD", "COULD", "COME", "KNOW", "TAKE", "YEAR", "THAN",
-    "THEM", "WELL", "ALSO", "BACK", "AFTER", "USE", "TWO", "WAY",
-    "MANY", "OIL", "SIT", "SET", "RUN", "EAT", "EYE", "AGO", "OFF",
-    "TOO", "OLD", "TELL", "VERY", "WHEN", "MUCH", "GO", "ME", "MY",
-    "NO", "UP", "SO", "DO", "IF", "IT", "HE", "WE", "US", "AT", "BY",
-    "OR", "AN", "BE", "AM", "IS", "AS", "ON", "OF", "TO", "IN", "A",
-    "MR", "MRS", "MS", "DR", "PROF", "ENG", "BNG", "MATH", "PHY",
-    "CHEM", "BIO", "ACC", "ECO", "CIV", "ELEC", "MECH", "COMP",
+    "SOME", "ANY", "ALL", "NOT", "NO", "YES", "OK", "OKAY",
+    "CONTACT", "NUMBER", "PHONE", "EMAIL", "ADDRESS", "INFO",
+    "INFORMATION", "DETAILS", "GIVE", "SHOW", "FIND", "SEARCH", "LIST",
+    "TEACHER", "TEACHERS", "CLASS", "ROOM", "SEMESTER", "SHIFT", "GROUP",
+    "SUBJECT", "DESIGNATION", "DEPARTMENT", "AND", "GET", "TELLS",
+    "INSTRUCTOR", "SIRS", "TEACHES", "TEACHING", "PROFESSOR", "LECTURER",
 }
 
 
-def extract_short_names(q_original):
-    """
-    Extract potential teacher short names/initials from query.
-    Returns list of UNIQUE uppercase codes ready for DB ilike matching.
-    Handles both ALL CAPS and lowercase/mixed case initials.
-    """
-    short_names = []
-    seen = set()
-    
-    # Strategy 1: ALL CAPS 2-5 letters -> definite initials
-    for word in re.findall(r'\b[A-Z]{2,5}\b', q_original):
-        if word not in _SHORT_NAME_STOPWORDS and word not in seen:
-            seen.add(word)
-            short_names.append(word)
-    
-    # Strategy 2: Lowercase/mixed that are likely initials
-    # Only extract if query has no Bangla (Latin-only queries)
-    if not contains_bangla(q_original):
-        q_lower = q_original.lower()
-        words = re.findall(r'\b[a-zA-Z]{2,5}\b', q_original)
-        
-        for word in words:
-            upper = word.upper()
-            if upper in _SHORT_NAME_STOPWORDS or upper in seen:
-                continue
-            
-            # 2-3 letters: very likely initials even in lowercase
-            if len(word) <= 3:
-                seen.add(upper)
-                short_names.append(upper)
-            else:
-                # 4-5 letters: check if near teacher honorifics
-                word_pos = q_lower.find(word.lower())
-                if word_pos != -1:
-                    context = q_lower[max(0, word_pos-15):word_pos+len(word)+15]
-                    teacher_context = any(h in context for h in [
-                        "sir", "mam", "maam", "madam", "teacher", 
-                        "স্যার", "ম্যাম", "শিক্ষক", "প্রভাষক", "instructor"
-                    ])
-                    if teacher_context:
-                        seen.add(upper)
-                        short_names.append(upper)
-    
-    return short_names
+# Common Bangla question/role words to exclude when extracting possible
+# Bangla name tokens from a query (so we don't try to ilike-search the
+# name column for words like "কে" or "শিক্ষক" themselves).
+_BANGLA_NAME_STOPWORDS = {
+    "কি", "কে", "কোন", "কখন", "কত", "কার", "এর", "এই", "আছে", "আছেন",
+    "হয়", "কোথায়", "দেন", "দাও", "বলো", "স্যার", "ম্যাম", "শিক্ষক",
+    "শিক্ষিকা", "নাম", "সম্পর্কে", "প্রভাষক", "অধ্যাপক", "ইনস্ট্রাক্টর",
+}
 
 
-# ==================== CONTEXT EXTRACTION ====================
+def extract_context(q_original, history=None):
+    """Extract department, shift, semester, day, floor from question + history."""
+    q = q_original          # keep original for short_names regex
+    ql = q_original.lower() # lowercased for keyword matching
 
-def extract_context(q_original, history=None, query_type_hint=None):
-    """
-    Extract department, shift, semester, day, floor from question.
-    
-    CRITICAL FIX: We only look at history for context if the current query
-    is ambiguous AND the same type as previous queries. This prevents
-    "who is farzana" (electrical) from poisoning "who is mahmud" (civil).
-    """
-    q = q_original
-    ql = q_original.lower()
-    
-    # Determine query type to prevent cross-type context pollution
-    teacher_keywords = ["শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
-                       "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
-                       "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
-                       "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-                       "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত",
-                       "ফোন", "নাম্বার", "contact", "number", "phone"]
-    
-    routine_keywords = ["রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
-                       "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
-                       "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroom",
-                       "কবে", "কতটায়"]
-    
-    is_teacher_query = any(kw in ql for kw in teacher_keywords)
-    is_routine_query = any(kw in ql for kw in routine_keywords)
-    
-    # Use history ONLY if same query type and current query is very short/ambiguous
     history = history or []
-    history_combined = ""
-    
-    if len(q_original) < 25 and history:
-        # Only use last 2 messages, and only if they appear to be same type
-        recent_history = history[-2:]
-        hist_text = " ".join(m.get("content", "") for m in recent_history).lower()
-        
-        prev_was_teacher = any(kw in hist_text for kw in teacher_keywords)
-        prev_was_routine = any(kw in hist_text for kw in routine_keywords)
-        
-        if (is_teacher_query and prev_was_teacher) or (is_routine_query and prev_was_routine):
-            history_combined = hist_text
-    
-    all_text = ql + " " + history_combined if history_combined else ql
+    history_combined = " ".join(
+        m.get("content", "") for m in history[-6:]
+    ).lower()
 
-    # Mapping dictionaries
     dept_map = {
         "সিভিল": "সিভিল", "civil": "সিভিল",
-        "ইলেকট্রিক্যাল": "ইলেকট্রিক্যাল", "ইলেক্ট্রিক্যাল": "ইলেকট্রিক্যাল", 
-        "electrical": "ইলেকট্রিক্যাল", "ইলেকট্রিকাল": "ইলেকট্রিক্যাল",
+        "ইলেকট্রিক্যাল": "ইলেকট্রিক্যাল", "ইলেক্ট্রিক্যাল": "ইলেকট্রিক্যাল", "electrical": "ইলেকট্রিক্যাল",
         "কম্পিউটার": "কম্পিউটার", "computer": "কম্পিউটার",
         "মেকানিক্যাল": "মেকানিক্যাল", "mechanical": "মেকানিক্যাল",
         "আর্কিটেকচার": "আর্কিটেকচার", "architecture": "আর্কিটেকচার",
         "ইলেকট্রনিক্স": "ইলেকট্রনিক্স", "electronics": "ইলেকট্রনিক্স",
         "কেমিক্যাল": "কেমিক্যাল", "chemical": "কেমিক্যাল",
         "টেক্সটাইল": "টেক্সটাইল", "textile": "টেক্সটাইল",
-        "পাওয়ার": "পাওয়ার", "power": "পাওয়ার",
-        "রেফ্রিজারেশন": "রেফ্রিজারেশন", "refrigeration": "রেফ্রিজারেশন",
     }
+
 
     shift_map = {
         "প্রথম শিফট": "১ম", "১ম শিফট": "১ম",
@@ -190,6 +100,7 @@ def extract_context(q_original, history=None, query_type_hint=None):
         "দ্বিতীয়": "২য়", "ডে": "২য়", "day shift": "২য়",
     }
 
+   
     semester_map = {
         "১ম সেমিস্টার": "১ম", "প্রথম সেমিস্টার": "১ম",
         "২য় সেমিস্টার": "২য়", "দ্বিতীয় সেমিস্টার": "২য়",
@@ -224,25 +135,46 @@ def extract_context(q_original, history=None, query_type_hint=None):
 
     group_match = re.findall(r'\b([A-D])\b', q)
 
-    # Use the new extract_short_names function
-    short_names = extract_short_names(q_original) if not contains_bangla(q_original) else []
-    
     ctx = {
-        "department": None,
-        "shift": None,
-        "semester": None,
-        "day": None,
-        "floor": None,
+        "department": None, "shift": None, "semester": None,
+        "day": None, "floor": None,
         "group": group_match[0] if group_match else None,
-        "short_names": short_names,
-        "has_bangla": contains_bangla(q_original),
+        # Case-insensitive short-name matching: previously [A-Z]{2,5} only
+        # matched all-caps codes (e.g. "MAH"); lowercase/mixed-case codes
+        # like "mah" were silently ignored. Now we match either case and
+        # normalize to uppercase so downstream ilike() lookups still work.
+        # Common English function words are filtered out below (_SHORT_NAME_STOPWORDS)
+        # so "who is ... maam" doesn't get parsed as teacher initials "WHO"/"IS"/"MAAM".
+        "short_names": [
+            s.upper() for s in re.findall(r'\b[A-Za-z]{2,5}\b', q)
+            if s.upper() not in _SHORT_NAME_STOPWORDS
+        ],
+        # Full-length Latin name words (e.g. "farzana", "akter" — not capped
+        # at 5 chars like short_names above) used to match against the
+        # name_en (romanized) column, so full names typed in English/Banglish
+        # can be matched precisely instead of relying on the full-directory
+        # fallback + Gemini guesswork.
+        "name_tokens": [
+            w.upper() for w in re.findall(r'\b[A-Za-z]{3,}\b', q)
+            if w.upper() not in _SHORT_NAME_STOPWORDS
+        ],
+        # Bangla-script full-name words (e.g. "ফারজানা", "আক্তার") so a
+        # Bangla-typed full-name query actually gets searched against the
+        # name column, instead of silently falling through to a generic
+        # unfiltered department/shift browse when no Latin tokens exist.
+        "bangla_name_tokens": [
+            w for w in re.findall(r'[\u0980-\u09FF]{2,}', q)
+            if w not in _BANGLA_NAME_STOPWORDS
+        ],
     }
 
-    ctx["department"] = _find_earliest_match(dept_map, all_text)
-    ctx["day"] = _find_earliest_match(day_map, all_text)
-    ctx["floor"] = _find_earliest_match(floor_map, all_text)
+    all_text = ql + " " + history_combined
 
-    # Shift detection
+    ctx["department"] = _find_earliest_match(dept_map, all_text)
+    ctx["day"]        = _find_earliest_match(day_map, all_text)
+    ctx["floor"]      = _find_earliest_match(floor_map, all_text)
+
+
     shift_pattern = re.search(
         r'(১ম|প্রথম|first|1st|morning|মর্নিং)\s*(শিফট|shift)?|'
         r'(২য়|দ্বিতীয়|second|2nd|day|ডে)\s*(শিফট|shift)',
@@ -257,17 +189,21 @@ def extract_context(q_original, history=None, query_type_hint=None):
     else:
         ctx["shift"] = _find_earliest_match(shift_map, all_text)
 
-    # Semester detection with shift collision avoidance
+
     semester_from_map = _find_earliest_match(semester_map, all_text)
 
+    # If the semester_map picked the same ordinal as shift (e.g. both
+    # matched "1st"), we need to find the NEXT ordinal in the text.
     if semester_from_map and ctx["shift"]:
+        shift_en_map = {"১ম": "1st", "২য়": "2nd"}
+        shift_en = shift_en_map.get(ctx["shift"], "")
+
         shift_ordinals = {
             "১ম": ["১ম", "প্রথম", "1st", "first", "morning", "মর্নিং"],
             "২য়": ["২য়", "দ্বিতীয়", "2nd", "second", "day", "ডে"],
         }
         shift_keywords = shift_ordinals.get(ctx["shift"], [])
 
-        # Find the earliest match in text
         earliest_sem_key = None
         earliest_sem_idx = None
         for key, val in semester_map.items():
@@ -276,8 +212,8 @@ def extract_context(q_original, history=None, query_type_hint=None):
                 earliest_sem_idx = idx
                 earliest_sem_key = key
 
-        # If earliest match is actually a shift keyword, find next best
         if earliest_sem_key and earliest_sem_key in shift_keywords:
+           
             sem_keyword_idx = all_text.find("semester")
             if sem_keyword_idx == -1:
                 sem_keyword_idx = all_text.find("সেমিস্টার")
@@ -286,7 +222,7 @@ def extract_context(q_original, history=None, query_type_hint=None):
             best_dist = None
             for key, val in semester_map.items():
                 if key in shift_keywords:
-                    continue
+                    continue  
                 idx = all_text.find(key)
                 if idx == -1:
                     continue
@@ -297,6 +233,7 @@ def extract_context(q_original, history=None, query_type_hint=None):
                         best_key = key
                         semester_from_map = val
                 else:
+                    
                     if best_key is None:
                         best_key = key
                         semester_from_map = val
@@ -306,105 +243,163 @@ def extract_context(q_original, history=None, query_type_hint=None):
     return ctx
 
 
-# ==================== TEACHER SEARCH (FIXED) ====================
+
+# TEACHER SEARCH
+
+_teachers_has_name_en = None  # lazily detected once per process
+
+
+def _teacher_select_fields():
+    """Whether the `teachers` table has a name_en (romanized) column.
+
+    Detected once and cached. If you haven't added the column yet, this
+    quietly falls back to the old field list so nothing breaks — but see
+    the note in this conversation about why adding name_en is the real fix
+    for the Bangla-vs-English name matching problem.
+    """
+    global _teachers_has_name_en
+    if _teachers_has_name_en is None:
+        try:
+            supabase.table("teachers").select("name_en").limit(1).execute()
+            _teachers_has_name_en = True
+            print("teachers.name_en column detected — bilingual name matching enabled", flush=True)
+        except Exception:
+            _teachers_has_name_en = False
+            print("teachers.name_en column NOT found — add it for reliable English full-name search", flush=True)
+
+    if _teachers_has_name_en:
+        return "name,name_en,subject,short_name,designation,department,shift,contact_number"
+    return "name,subject,short_name,designation,department,shift,contact_number"
+
 
 def _get_full_teacher_directory():
-    """
-    Fetch full teacher directory for Gemini cross-script matching.
-    This is the ONLY way to match Banglish names to Bangla DB entries.
+    """Fallback used only when structured ilike filters find no match at all.
+
+    This should be rare now that name_en lets us match full English names
+    precisely. It's kept as a last resort for typos/nicknames, but the
+    system prompt is told explicitly not to fabricate details from it.
     """
     try:
-        result = supabase.table("teachers").select(
-            "name,short_name,department,shift,designation,contact_number"
-        ).order("name").limit(300).execute()
+        fields = "name,short_name,department,shift,designation,contact_number"
+        if _teachers_has_name_en:
+            fields = "name,name_en,short_name,department,shift,designation,contact_number"
+        result = supabase.table("teachers").select(fields).order("name").limit(300).execute()
         return result.data or []
     except Exception as e:
         print(f"Teacher directory fetch error: {e}", flush=True)
         return []
 
 
-def _fresh_teacher_query():
-    """ALWAYS returns a brand new query builder. Never reuse."""
-    return supabase.table("teachers").select(
-        "name,subject,short_name,designation,department,shift,contact_number"
-    )
+def _teacher_base_query(department=None):
+    """Build a fresh teacher-select query builder.
+
+    IMPORTANT: supabase-py / postgrest-py query builders mutate themselves
+    in place when you call .eq()/.ilike()/etc and return `self`, not a new
+    copy. Reusing one builder variable for both a "filtered" attempt and a
+    "fallback" attempt means the fallback silently ends up with the same
+    filters still applied (previously .eq("shift", ...) permanently
+    "stuck" onto the base query). This helper always returns a brand new
+    query object so filters never leak between attempts.
+    """
+    query = supabase.table("teachers").select(_teacher_select_fields())
+    if department:
+        query = query.ilike("department", f"%{department}%")
+    return query
+
+
+def _teacher_name_or_filter(token):
+    """Build the .or_() filter string for a single search token, matching
+    short_name, the Bangla name column, and — if present — the romanized
+    name_en column. This is what actually lets "farzana akter" (English)
+    and "ফারজানা আক্তার" (Bangla) both resolve to the same teacher, instead
+    of only one script ever matching."""
+    parts = [f"short_name.ilike.%{token}%", f"name.ilike.%{token}%"]
+    if _teachers_has_name_en:
+        parts.append(f"name_en.ilike.%{token}%")
+    return ",".join(parts)
 
 
 def search_teachers(q_raw, ctx):
-    """
-    FIXED teacher search:
-    1. If query has Bangla script -> skip ilike entirely, use full directory
-    2. If query has short names -> try structured search with fresh builders
-    3. If structured fails -> fall back to full directory (never empty)
-    4. If no short names -> it's a browse query, use department/shift filters
-    """
     try:
-        # CASE 1: Query contains Bangla text
-        # ilike will NEVER match Bangla<->Latin, so skip directly to full directory
-        if ctx.get("has_bangla"):
-            print("Teacher search: Bangla detected, using full directory", flush=True)
-            return _get_full_teacher_directory()
-
+        _teacher_select_fields()  # ensure name_en detection has run
         results = []
 
-        # CASE 2: Has short name initials (e.g., "MAH", "FAR", "mah", "fak")
-        if ctx["short_names"]:
-            for sn in ctx["short_names"]:
-                # Attempt 1: with department + shift filters
-                query = _fresh_teacher_query()
-                if ctx["department"]:
-                    query = query.ilike("department", f"%{ctx['department']}%")
-                
-                query = query.or_(f"short_name.ilike.%{sn}%,name.ilike.%{sn}%")
-                
+        # Search tokens: short codes (FA, MSI) AND full English name words
+        # (farzana, akter) both get tried against name/short_name/name_en.
+        search_tokens = list(dict.fromkeys(
+            ctx["short_names"] + ctx.get("name_tokens", []) + ctx.get("bangla_name_tokens", [])
+        ))
+
+        if search_tokens:
+            for token in search_tokens:
+                # Fresh builder per attempt so filters don't leak.
+                filtered_query = _teacher_base_query(ctx["department"]).or_(
+                    _teacher_name_or_filter(token)
+                )
+
                 if ctx["shift"]:
-                    r = query.eq("shift", ctx["shift"]).execute()
+                    r = filtered_query.eq("shift", ctx["shift"]).execute()
                     if r.data:
                         results.extend(r.data)
                         continue
-                
-                # Attempt 2: without shift filter (FRESH builder!)
-                query2 = _fresh_teacher_query()
-                if ctx["department"]:
-                    query2 = query2.ilike("department", f"%{ctx['department']}%")
-                query2 = query2.or_(f"short_name.ilike.%{sn}%,name.ilike.%{sn}%")
-                r2 = query2.execute()
-                results.extend(r2.data or [])
+                    # Real fallback: brand new query, no shift filter stuck on it.
+                    fallback_query = _teacher_base_query(ctx["department"]).or_(
+                        _teacher_name_or_filter(token)
+                    )
+                    r = fallback_query.execute()
+                    results.extend(r.data or [])
+                else:
+                    r = filtered_query.execute()
+                    results.extend(r.data or [])
 
-        # CASE 3: No short names, but has department/shift -> browse query
-        elif ctx["department"] or ctx["shift"]:
-            query = _fresh_teacher_query()
-            if ctx["department"]:
-                query = query.ilike("department", f"%{ctx['department']}%")
+        if not results and not search_tokens:
+            # No name/short-name signal at all -> this is a genuine generic
+            # department/shift browse query (e.g. "electrical department
+            # 2nd shift teachers"), so an unfiltered/lightly-filtered
+            # browse fetch is appropriate here.
+            base_query = _teacher_base_query(ctx["department"])
             if ctx["shift"]:
-                query = query.eq("shift", ctx["shift"])
-            
-            r = query.limit(60).execute()
-            results = r.data or []
+                r = base_query.eq("shift", ctx["shift"]).execute()
+                if r.data:
+                    results = r.data
+                else:
+                    # Real fallback: fresh query without the shift filter.
+                    fallback_query = _teacher_base_query(ctx["department"])
+                    results = fallback_query.limit(60).execute().data or []
+            else:
+                results = base_query.limit(60).execute().data or []
 
-        # Deduplicate
+        # NOTE: if search_tokens was non-empty but every attempt above found
+        # nothing (e.g. a genuine typo, or name_en not populated yet for that
+        # teacher), we deliberately do NOT fall back to an unfiltered browse
+        # dump here -- that would silently return unrelated teachers and
+        # mask the real problem. Instead we fall through to the
+        # full-directory fallback below.
+
         seen = set()
         unique = []
         for t in results:
-            name = t.get("name") or t.get("short_name") or "unknown"
-            if name not in seen:
-                seen.add(name)
+            if t["name"] not in seen:
+                seen.add(t["name"])
                 unique.append(t)
 
         if unique:
-            print(f"Teacher search: structured found {len(unique)} results", flush=True)
             return unique
 
-        # CASE 4: Everything failed -> full directory fallback
-        print("Teacher search: no structured match, falling back to full directory", flush=True)
+        # Structured ilike matching found nothing — most likely a full
+        # Bangla name was typed in Latin/Banglish. Fall back to the full
+        # directory so Gemini can match it by reasoning instead of us
+        # silently returning [] (see _get_full_teacher_directory docstring).
+        print("Teacher search: no ilike match, falling back to full directory", flush=True)
         return _get_full_teacher_directory()
 
     except Exception as e:
         print(f"Teacher search error: {e}", flush=True)
-        return _get_full_teacher_directory()  # Never return empty on error
+        return []
 
 
-# ==================== ROUTINE SEARCH ====================
+
+# ROUTINE SEARCH
 
 def search_routines(q_raw, ctx):
     try:
@@ -418,7 +413,7 @@ def search_routines(q_raw, ctx):
         ])
 
         if not has_any_filter:
-            print("Routine: no filters detected, returning []", flush=True)
+            print("Routine: no filters detected, returning [] to let Gemini ask", flush=True)
             return []
 
         if ctx["department"]:
@@ -429,25 +424,13 @@ def search_routines(q_raw, ctx):
             query = query.ilike("semester", f"%{ctx['semester']}%")
         if ctx["day"]:
             query = query.ilike("day", f"%{ctx['day']}%")
+
         if ctx.get("group"):
             query = query.ilike("group_name", f"%{ctx['group']}%")
 
         if ctx["short_names"]:
             for sn in ctx["short_names"]:
-                # Fresh builder for each short name attempt
-                q2 = supabase.table("routines").select(
-                    "department,shift,semester,group_name,day,period,start_time,end_time,subject,teacher_short,room"
-                )
-                if ctx["department"]:
-                    q2 = q2.ilike("department", f"%{ctx['department']}%")
-                if ctx["shift"]:
-                    q2 = q2.eq("shift", ctx["shift"])
-                if ctx["semester"]:
-                    q2 = q2.ilike("semester", f"%{ctx['semester']}%")
-                if ctx["day"]:
-                    q2 = q2.ilike("day", f"%{ctx['day']}%")
-                
-                r = q2.ilike("teacher_short", f"%{sn}%").execute()
+                r = query.ilike("teacher_short", f"%{sn}%").execute()
                 if r.data:
                     return r.data
 
@@ -459,7 +442,8 @@ def search_routines(q_raw, ctx):
         return []
 
 
-# ==================== LOCATION SEARCH ====================
+
+# LOCATION SEARCH
 
 def search_locations(q_raw, ctx):
     try:
@@ -470,8 +454,8 @@ def search_locations(q_raw, ctx):
             "অফিস", "office", "কক্ষ", "room", "gate", "গেট",
             "mosque", "মসজিদ", "field", "মাঠ", "parking", "পার্কিং",
             "wiring", "hardware", "electrical", "computer",
-            "civil", "mechanical", "workshop", "ওয়ার্কশপ",
-            "center", "centre", "কেন্দ্র", "chemistry", "physics", "wood shop",
+            "civil", "mechanical",  "workshop", "ওয়ার্কশপ",
+            "center", "centre", "কেন্দ্র", "chemistry","physics", "wood shop",
         ]
 
         room_numbers = re.findall(r'\b\d{2,4}\b', q_raw)
@@ -483,9 +467,11 @@ def search_locations(q_raw, ctx):
                     f"name.ilike.%{rn}%,description.ilike.%{rn}%"
                 ).limit(10).execute()
                 if result.data:
+                    print(f"Location: matched by room number '{rn}': {len(result.data)} rows", flush=True)
                     return result.data
 
         keywords = [term for term in location_terms if term in q_raw.lower()]
+
         if keywords:
             for kw in keywords:
                 query = supabase.table("locations").select(
@@ -506,6 +492,7 @@ def search_locations(q_raw, ctx):
             if result.data:
                 return result.data
 
+        print("Location: no keyword/floor match, returning [] to avoid context flood", flush=True)
         return []
 
     except Exception as e:
@@ -513,7 +500,8 @@ def search_locations(q_raw, ctx):
         return []
 
 
-# ==================== QA SEARCH ====================
+
+# QA SEARCH
 
 def search_qa(q_raw):
     try:
@@ -523,10 +511,11 @@ def search_qa(q_raw):
             .limit(10).execute()
 
         if result.data:
+            print(f"QA matched by chunk: {len(result.data)} rows", flush=True)
             return result.data
 
         bangla_stopwords = {"কি", "কে", "কোন", "কখন", "কত", "কার", "এর", "এই",
-                           "আছে", "আছেন", "হয়", "কোথায়", "দেন", "দাও", "বলো"}
+                            "আছে", "আছেন", "হয়", "কোথায়", "দেন", "দাও", "বলো"}
         words = [
             w.strip("?।,!\"'") for w in re.split(r'\s+', q_raw)
             if len(w.strip("?।,!\"'")) >= 3 and w.strip("?।,!\"'") not in bangla_stopwords
@@ -534,6 +523,7 @@ def search_qa(q_raw):
 
         seen = set()
         matches = []
+
         for word in words[:8]:
             r = supabase.table("qa").select("question,answer") \
                 .ilike("question", f"%{word}%") \
@@ -547,12 +537,14 @@ def search_qa(q_raw):
                     matches.append(row)
 
         if matches:
+            print(f"QA matched by keywords: {len(matches)} rows", flush=True)
             return matches[:20]
 
         result = supabase.table("qa").select("question,answer") \
             .not_.is_("answer", "null") \
             .limit(35).execute()
 
+        print(f"QA fallback: {len(result.data or [])} rows", flush=True)
         return result.data or []
 
     except Exception as e:
@@ -560,20 +552,21 @@ def search_qa(q_raw):
         return []
 
 
-# ==================== SMART DATA FETCHING (RAG) ====================
+
+# SMART DATA FETCHING (RAG)
 
 def get_relevant_data(user_question, history=None):
     ctx = extract_context(user_question, history)
     q = user_question.lower()
     data = ""
 
-    print(f"CTX -> dept={ctx['department']} shift={ctx['shift']} "
-          f"sem={ctx['semester']} group={ctx['group']} day={ctx['day']} "
-          f"short_names={ctx['short_names']} has_bangla={ctx.get('has_bangla')}", flush=True)
+ 
+    print(f"CTX → dept={ctx['department']} shift={ctx['shift']} "
+          f"sem={ctx['semester']} group={ctx['group']} day={ctx['day']}", flush=True)
 
     history = history or []
     history_text = " ".join(
-        m.get("content", "") for m in history[-3:]  # Reduced from 6 to 3
+        m.get("content", "") for m in history[-6:]
     ).lower()
     q_with_history = q + " " + history_text
 
@@ -601,9 +594,8 @@ def get_relevant_data(user_question, history=None):
             "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
             "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
             "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত",
-            "ফোন", "নাম্বার", "contact", "number", "phone"
-        ]) or ctx["short_names"]:
+            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
+        ]) or ctx["short_names"] or ctx.get("name_tokens") or ctx.get("bangla_name_tokens"):
             rows = search_teachers(user_question, ctx)
             if rows:
                 data += "=== শিক্ষক তালিকা ===\n"
@@ -655,7 +647,7 @@ def get_relevant_data(user_question, history=None):
                 if answer.strip():
                     data += f"প্রশ্ন: {item['question']}\nউত্তর: {answer}\n\n"
 
-        # Context size guard
+        # --- Context size guard ---
         if len(data) > MAX_CONTEXT_CHARS:
             data = data[:MAX_CONTEXT_CHARS] + "\n[...তথ্য সংক্ষিপ্ত করা হয়েছে]"
 
@@ -670,8 +662,9 @@ def get_relevant_data(user_question, history=None):
         return "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫।"
 
 
-# ==================== SYSTEM PROMPT ====================
-
+# ==============================
+# SYSTEM PROMPT
+# ==============================
 def build_system_prompt(user_question="", history=None):
     relevant_data = get_relevant_data(user_question, history or [])
     return f"""তুমি ঢাকা পলিটেকনিক ইনস্টিটিউটের AI সহকারী, নাম DPI Assistant। সবসময় বাংলায় উত্তর দাও।
@@ -683,14 +676,15 @@ def build_system_prompt(user_question="", history=None):
 - রাজনীতি, ধর্মীয় বিতর্ক, অশ্লীল, প্রেম বা কলেজ-বহির্ভূত প্রশ্নে বলো: "আমি শুধু DPI সম্পর্কিত প্রশ্নের উত্তর দিতে পারি।"
 - রুটিন জিজ্ঞেস করলে, যদি নিচের তথ্যে ইতিমধ্যে বিভাগ/শিফট/সেমিস্টার অনুযায়ী উত্তর থাকে তাহলে সরাসরি উত্তর দাও; তথ্য না থাকলে বা অস্পষ্ট হলে ধাপে ধাপে জিজ্ঞেস করো: বিভাগ → শিফট → সেমিস্টার ও গ্রুপ
 - শিক্ষক সম্পর্কে জিজ্ঞেস করলে, যদি নিচের "শিক্ষক তালিকা" তথ্যে উত্তর থাকে তাহলে সরাসরি সেখান থেকে উত্তর দাও; একাধিক ফলাফল থাকলে বা তথ্য না পেলে তখনই জিজ্ঞেস করো: কোন বিভাগ? কোন শিফট?
+- শিক্ষক তালিকায় প্রশ্নে উল্লেখিত নামের সাথে হুবহু বা স্পষ্টভাবে কাছাকাছি মিল না পেলে অনুমান করে কোনো নাম, পদবি, বা যোগাযোগ নম্বর তৈরি/বানিয়ে বলবে না — এমতাবস্থায় বলো তথ্য নেই বা আরেকটু স্পষ্ট করতে বলো
 - তোমাকে তৈরি করেছে ঢাকা পলিটেকনিক ইনস্টিটিউট এর ইলেকট্রিক্যাল টেকনোলজির ২০২৩ - ২০২৪ সেশনের ৩ জন ছাত্র। তারা হলো সাকিন আল আনফি, মুওদুদ বিশ্বাস,নাফিজুর রহমান নূর।
 - ক্যাম্পাস অফিস টাইম ২ ভাগে বিভক্ত।প্রথম শিফটের জন্য সকাল ৭ টা থেকে ১:১৫ দ্বিতীয় শিফটের জন্য ১:১৫ থেকে ৫:৩০
-
 === তথ্য ===
 {relevant_data}"""
 
 
-# ==================== ERROR LOGGER ====================
+
+# ERROR LOGGER → SUPABASE
 
 def log_error(error_type, user_message, error_detail):
     try:
@@ -703,7 +697,8 @@ def log_error(error_type, user_message, error_detail):
         print(f"Error log save failed: {e}", flush=True)
 
 
-# ==================== GEMINI RESPONSE ====================
+
+# GEMINI RESPONSE
 
 def get_response(system_prompt, history, user_input):
     try:
@@ -727,7 +722,8 @@ def get_response(system_prompt, history, user_input):
         return None, str(e)
 
 
-# ==================== HELPERS ====================
+
+# HELPERS
 
 def save_conversation(user_message, bot_reply):
     try:
@@ -739,7 +735,8 @@ def save_conversation(user_message, bot_reply):
         print(f"Conversation save error: {e}", flush=True)
 
 
-# ==================== ROUTES ====================
+
+# ROUTES
 
 @app.route("/")
 def home():
@@ -776,7 +773,7 @@ def ask():
         log_error("SERVER_ERROR", user_input, e)
         return jsonify({"reply": "দুঃখিত, সার্ভারে সমস্যা হয়েছে। একটু পরে চেষ্টা করুন।"})
 
-
+ 
 @app.route("/tts", methods=["POST"])
 def tts():
     """Convert text to speech using gTTS and return MP3 audio bytes."""
@@ -786,18 +783,18 @@ def tts():
         if not text:
             return jsonify({"error": "no text"}), 400
 
-        text = re.sub(r'#{1,6}\s*', '', text)
-        text = re.sub(r'\*{1,3}', '', text)
-        text = re.sub(r'_{1,3}', '', text)
-        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)
-        text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)
-        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-        text = re.sub(r'\|', ' ', text)
-        text = re.sub(r'\n{2,}', '\n', text)
-        text = re.sub(r'[ \t]{2,}', ' ', text)
+        text = re.sub(r'#{1,6}\s*', '', text)           # headers
+        text = re.sub(r'\*{1,3}', '', text)              # bold / italic *
+        text = re.sub(r'_{1,3}', '', text)               # bold / italic _
+        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)   # bullet lists
+        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)   # numbered lists
+        text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE) # horizontal rules ---
+        text = re.sub(r'^\s*>\s*', '', text, flags=re.MULTILINE)        # blockquotes
+        text = re.sub(r'`{1,3}[^`]*`{1,3}', '', text)                  # inline/block code
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)          # links → keep label
+        text = re.sub(r'\|', ' ', text)                  # table pipes
+        text = re.sub(r'\n{2,}', '\n', text)             # collapse blank lines
+        text = re.sub(r'[ \t]{2,}', ' ', text)           # collapse spaces
         text = text.strip()
 
         if len(text) > 800:
@@ -819,7 +816,6 @@ def tts():
     except Exception as e:
         print(f"TTS error: {e}", flush=True)
         return jsonify({"error": str(e)}), 500
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
