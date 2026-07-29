@@ -443,7 +443,7 @@ def search_routines(q_raw, ctx):
                 if r.data:
                     return r.data
 
-        result = query.limit(30).execute()
+        result = query.limit(100).execute()
         return result.data or []
 
     except Exception as e:
