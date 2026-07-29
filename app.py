@@ -25,7 +25,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-MAX_CONTEXT_CHARS = 30000
+# NOTE: context-length truncation removed per request ("erase all token limits").
+# If you ever hit real API context-window errors, reintroduce a guard here.
 
 
 
@@ -278,11 +279,19 @@ def _get_full_teacher_directory():
     This should be rare now that name_en lets us match full English names
     precisely. It's kept as a last resort for typos/nicknames, but the
     system prompt is told explicitly not to fabricate details from it.
+
+    FIX: this previously did NOT select `subject`, but the caller in
+    get_relevant_data() formats every teacher row assuming a `subject` key
+    exists -> KeyError: 'subject' whenever this fallback path was used
+    (visible in logs as "Data fetch error: 'subject'"), which wiped out
+    the entire RAG response for that turn. Now selects subject too, and
+    the formatting code also uses .get() defensively as a second layer
+    of protection.
     """
     try:
-        fields = "name,short_name,department,shift,designation,contact_number"
+        fields = "name,short_name,department,shift,designation,contact_number,subject"
         if _teachers_has_name_en:
-            fields = "name,name_en,short_name,department,shift,designation,contact_number"
+            fields = "name,name_en,short_name,department,shift,designation,contact_number,subject"
         result = supabase.table("teachers").select(fields).order("name").limit(300).execute()
         return result.data or []
     except Exception as e:
@@ -450,7 +459,7 @@ def search_locations(q_raw, ctx):
         location_terms = [
             "ওয়াশরুম", "টয়লেট", "washroom", "toilet",
             "ক্যান্টিন", "canteen", "লাইব্রেরি", "library",
-            "lab", "ল্যাব", "laboratory", "হলরুম", "hall",
+            "lab", "ল্যাব", "laboratory", "হলরুম", "hall", "auditorium",
             "অফিস", "office", "কক্ষ", "room", "gate", "গেট",
             "mosque", "মসজিদ", "field", "মাঠ", "parking", "পার্কিং",
             "wiring", "hardware", "electrical", "computer",
@@ -555,12 +564,51 @@ def search_qa(q_raw):
 
 # SMART DATA FETCHING (RAG)
 
+# Keyword sets pulled out so we can check "does this query even look like a
+# routine / location / notice question" BEFORE deciding whether a stray
+# name_token (e.g. "auditorium", "canteen") should be allowed to force a
+# teacher search. Previously ANY 3+ letter English word in the message
+# became a name_token, and `ctx.get("name_tokens")` alone was enough to
+# trigger search_teachers() -- so "where is auditorium" ran a teacher
+# search for the word "AUDITORIUM", found no match, fell back to the full
+# teacher directory (which was missing the `subject` column), threw a
+# KeyError, and — because the whole function was one big try/except —
+# wiped out every other section's data for that turn too. That's why only
+# "pure" teacher questions ever seemed to work.
+
+_ROUTINE_KEYWORDS = [
+    "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
+    "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
+    "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroom"
+]
+
+_TEACHER_KEYWORDS = [
+    "শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
+    "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
+    "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
+    "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
+    "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
+]
+
+_NOTICE_KEYWORDS = [
+    "নোটিশ", "বিজ্ঞপ্তি", "notice", "circular", "ঘোষণা", "সর্বশেষ", "নতুন"
+]
+
+_LOCATION_KEYWORDS = [
+    "কোথায়", "রুম", "ওয়াশরুম", "টয়লেট", "ক্যান্টিন",
+    "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor",
+    "lab", "laboratory", "center", "centre", "wiring",
+    "hardware", "ল্যাব", "কেন্দ্র", "gate", "গেট",
+    "mosque", "মসজিদ", "field", "মাঠ", "অফিস", "office", "physics", "chemistry",
+    "auditorium", "hall"
+]
+
+
 def get_relevant_data(user_question, history=None):
     ctx = extract_context(user_question, history)
     q = user_question.lower()
     data = ""
 
- 
     print(f"CTX → dept={ctx['department']} shift={ctx['shift']} "
           f"sem={ctx['semester']} group={ctx['group']} day={ctx['day']}", flush=True)
 
@@ -570,48 +618,59 @@ def get_relevant_data(user_question, history=None):
     ).lower()
     q_with_history = q + " " + history_text
 
-    try:
-        # --- ROUTINE ---
-        if any(w in q_with_history for w in [
-            "রুটিন", "ক্লাস", "routine", "class", "সময়", "পিরিয়ড",
-            "কখন", "schedule", "তারিখ", "বার", "দিন", "বিষয়", "subject",
-            "আজকে", "আজ", "কোন রুম", "পড়া", "ক্লাসরুম", "classroom"
-        ]):
+    routine_hit = any(w in q_with_history for w in _ROUTINE_KEYWORDS)
+    teacher_kw_hit = any(w in q_with_history for w in _TEACHER_KEYWORDS)
+    notice_hit = any(w in q_with_history for w in _NOTICE_KEYWORDS)
+    location_hit = any(w in q_with_history for w in _LOCATION_KEYWORDS)
+
+    # FIX: a bare name_token/bangla_name_token no longer forces a teacher
+    # search on its own if the query already clearly looks like a routine,
+    # location, or notice question. short_names (2-5 letter ALL-CAPS style
+    # codes) are a stronger signal and still trigger teacher search on
+    # their own, since real words rarely look like "MSI" or "FA".
+    name_signal = bool(ctx.get("name_tokens") or ctx.get("bangla_name_tokens"))
+    teacher_hit = (
+        teacher_kw_hit
+        or bool(ctx["short_names"])
+        or (name_signal and not (routine_hit or location_hit or notice_hit))
+    )
+
+    # --- ROUTINE ---
+    if routine_hit:
+        try:
             rows = search_routines(user_question, ctx)
             if rows:
                 data += "=== ক্লাস রুটিন ===\n"
                 for r in rows:
                     data += (
-                        f"{r['department']}|{r['shift']}|{r['semester']}|"
-                        f"{r['group_name']}|{r['day']}|{r['period']}|"
-                        f"{r['start_time']}-{r['end_time']}|{r['subject']}|"
-                        f"{r['teacher_short']}|{r['room']}\n"
+                        f"{r.get('department','')}|{r.get('shift','')}|{r.get('semester','')}|"
+                        f"{r.get('group_name','')}|{r.get('day','')}|{r.get('period','')}|"
+                        f"{r.get('start_time','')}-{r.get('end_time','')}|{r.get('subject','')}|"
+                        f"{r.get('teacher_short','')}|{r.get('room','')}\n"
                     )
+        except Exception as e:
+            print(f"Data fetch error (routine section): {e}", flush=True)
 
-        # --- TEACHER ---
-        if any(w in q_with_history for w in [
-            "শিক্ষক", "স্যার", "ম্যাম", "teacher", "instructor",
-            "প্রভাষক", "অধ্যাপক", "শিক্ষিকা", "পড়ান", "পড়াচ্ছেন",
-            "কে পড়া", "স্যারের", "ম্যামের", "কোন স্যার", "কোন শিক্ষক",
-            "chief", "head", "hod", "বিভাগীয়", "প্রধান", "ইন্সট্রাক্টর",
-            "who is", "কে আছেন", "sir", "কে দায়িত্বে", "দায়িত্বপ্রাপ্ত"
-        ]) or ctx["short_names"] or ctx.get("name_tokens") or ctx.get("bangla_name_tokens"):
+    # --- TEACHER ---
+    if teacher_hit:
+        try:
             rows = search_teachers(user_question, ctx)
             if rows:
                 data += "=== শিক্ষক তালিকা ===\n"
                 for t in rows:
                     data += (
-                        f"{t['name']} | {t['designation']} | "
-                        f"{t['subject']} | {t['short_name']} | "
+                        f"{t.get('name','')} | {t.get('designation','')} | "
+                        f"{t.get('subject','')} | {t.get('short_name','')} | "
                         f"বিভাগ: {t.get('department', '')} | "
                         f"শিফট: {t.get('shift', '')} | "
                         f"যোগাযোগ: {t.get('contact_number', '')}\n"
                     )
+        except Exception as e:
+            print(f"Data fetch error (teacher section): {e}", flush=True)
 
-        # --- NOTICE ---
-        if any(w in q_with_history for w in [
-            "নোটিশ", "বিজ্ঞপ্তি", "notice", "circular", "ঘোষণা", "সর্বশেষ", "নতুন"
-        ]):
+    # --- NOTICE ---
+    if notice_hit:
+        try:
             rows = supabase.table("notices").select(
                 "title,content,date"
             ).order("created_at", desc=True).limit(5).execute()
@@ -619,47 +678,41 @@ def get_relevant_data(user_question, history=None):
                 data += "=== সাম্প্রতিক নোটিশ ===\n"
                 for n in rows.data:
                     content = (n.get("content") or "")[:200]
-                    data += f"• {n['title']} ({n['date']}): {content}\n"
+                    data += f"• {n.get('title','')} ({n.get('date','')}): {content}\n"
+        except Exception as e:
+            print(f"Data fetch error (notice section): {e}", flush=True)
 
-        # --- LOCATION ---
-        if any(w in q_with_history for w in [
-            "কোথায়", "রুম", "ওয়াশরুম", "টয়লেট", "ক্যান্টিন",
-            "লাইব্রেরি", "where", "room", "কক্ষ", "তলা", "floor",
-            "lab", "laboratory", "center", "centre", "wiring",
-            "hardware", "ল্যাব", "কেন্দ্র", "gate", "গেট",
-            "mosque", "মসজিদ", "field", "মাঠ", "অফিস", "office", "physics", "chemistry"
-        ]):
+    # --- LOCATION ---
+    if location_hit:
+        try:
             rows = search_locations(user_question, ctx)
             if rows:
                 data += "=== লোকেশন ===\n"
                 for l in rows:
                     data += (
-                        f"{l['name']}: {l['description']} | "
-                        f"তলা: {l['floor']} | বিল্ডিং: {l['building']}\n"
+                        f"{l.get('name','')}: {l.get('description','')} | "
+                        f"তলা: {l.get('floor','')} | বিল্ডিং: {l.get('building','')}\n"
                     )
+        except Exception as e:
+            print(f"Data fetch error (location section): {e}", flush=True)
 
-        # --- Q&A ---
+    # --- Q&A ---
+    try:
         qa_rows = search_qa(user_question)
         if qa_rows:
             data += "\n=== প্রশ্নোত্তর ===\n"
             for item in qa_rows:
                 answer = item.get("answer") or ""
                 if answer.strip():
-                    data += f"প্রশ্ন: {item['question']}\nউত্তর: {answer}\n\n"
-
-        # --- Context size guard ---
-        if len(data) > MAX_CONTEXT_CHARS:
-            data = data[:MAX_CONTEXT_CHARS] + "\n[...তথ্য সংক্ষিপ্ত করা হয়েছে]"
-
-        if not data.strip():
-            data = "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫।"
-
-        print(f"RAG data: {len(data)} chars", flush=True)
-        return data
-
+                    data += f"প্রশ্ন: {item.get('question','')}\nউত্তর: {answer}\n\n"
     except Exception as e:
-        print(f"Data fetch error: {e}", flush=True)
-        return "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫।"
+        print(f"Data fetch error (qa section): {e}", flush=True)
+
+    if not data.strip():
+        data = "ঢাকা পলিটেকনিক ইনস্টিটিউট, তেজগাঁও, ঢাকা। প্রতিষ্ঠাকাল: ১৯৫৫।"
+
+    print(f"RAG data: {len(data)} chars", flush=True)
+    return data
 
 
 # ==============================
@@ -702,10 +755,10 @@ def log_error(error_type, user_message, error_detail):
 
 def get_response(system_prompt, history, user_input):
     try:
+        # NOTE: max_output_tokens limit removed per request ("erase all token limits").
         model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
-            system_instruction=system_prompt,
-            generation_config={"max_output_tokens": 1000}
+            system_instruction=system_prompt
         )
 
         gemini_history = []
@@ -797,8 +850,8 @@ def tts():
         text = re.sub(r'[ \t]{2,}', ' ', text)           # collapse spaces
         text = text.strip()
 
-        if len(text) > 800:
-            text = text[:800] + "..."
+        # NOTE: 800-char truncation removed per request ("erase all token limits").
+        # gTTS can handle longer text; this may just take a little longer to synthesize.
 
         tts_obj = gTTS(text=text, lang="bn", slow=False)
         mp3_fp = io.BytesIO()
